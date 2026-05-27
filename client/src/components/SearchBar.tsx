@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { searchSpecies } from "../api";
 
 // --- Types ---
 export interface Species {
@@ -9,15 +10,21 @@ export interface Species {
 }
 
 // --- Mock Species List ---
-const MOCK_SPECIES: Species[] = [
-  { key: "1", commonName: "American Robin", scientificName: "Turdus migratorius", color: "#ef4444" },
-  { key: "2", commonName: "Bald Eagle", scientificName: "Haliaeetus leucocephalus", color: "#3b82f6" },
-  { key: "3", commonName: "Painted Bunting", scientificName: "Passerina ciris", color: "#8b5cf6" },
-  { key: "4", commonName: "Northern Cardinal", scientificName: "Cardinalis cardinalis", color: "#f97316" },
-  { key: "5", commonName: "Blue Jay", scientificName: "Cyanocitta cristata", color: "#06b6d4" },
-  { key: "6", commonName: "American Goldfinch", scientificName: "Spinus tristis", color: "#eab308" },
-  { key: "7", commonName: "Red-tailed Hawk", scientificName: "Buteo jamaicensis", color: "#a16207" },
-  { key: "8", commonName: "Great Blue Heron", scientificName: "Ardea herodias", color: "#64748b" },
+// const MOCK_SPECIES: Species[] = [
+//   { key: "1", commonName: "American Robin", scientificName: "Turdus migratorius", color: "#ef4444" },
+//   { key: "2", commonName: "Bald Eagle", scientificName: "Haliaeetus leucocephalus", color: "#3b82f6" },
+//   { key: "3", commonName: "Painted Bunting", scientificName: "Passerina ciris", color: "#8b5cf6" },
+//   { key: "4", commonName: "Northern Cardinal", scientificName: "Cardinalis cardinalis", color: "#f97316" },
+//   { key: "5", commonName: "Blue Jay", scientificName: "Cyanocitta cristata", color: "#06b6d4" },
+//   { key: "6", commonName: "American Goldfinch", scientificName: "Spinus tristis", color: "#eab308" },
+//   { key: "7", commonName: "Red-tailed Hawk", scientificName: "Buteo jamaicensis", color: "#a16207" },
+//   { key: "8", commonName: "Great Blue Heron", scientificName: "Ardea herodias", color: "#64748b" },
+// ];
+
+// --- Color Pool ---
+const COLORS = [
+  "#ef4444", "#3b82f6", "#8b5cf6", "#f97316",
+  "#06b6d4", "#eab308", "#a16207", "#64748b"
 ];
 
 // --- Props ---
@@ -30,13 +37,39 @@ interface Props {
 export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [suggestions, setSuggestions] = useState<Species[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const suggestions = MOCK_SPECIES.filter(
-    (s) =>
-      (s.commonName.toLowerCase().includes(query.toLowerCase()) ||
-        s.scientificName.toLowerCase().includes(query.toLowerCase())) &&
-      !selectedSpecies.find((sel) => sel.key === s.key)
-  );
+  useEffect(() => {
+    if (query.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsLoading(true);
+      try {
+        const results = await searchSpecies(query);
+        const mapped: Species[] = results
+          .filter((r: any) => !selectedSpecies.find((s) => s.key === String(r.key)))
+          .map((r: any, i: number) => ({
+            key: String(r.key),
+            commonName: r.commonName || r.name,
+            scientificName: r.name,
+            color: COLORS[(selectedSpecies.length + i) % COLORS.length],
+          }));
+        setSuggestions(mapped);
+      } catch (err) {
+        console.error("Species search failed:", err);
+        setSuggestions([]);
+      } finally {
+        setIsLoading(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [query, selectedSpecies]);
+
 
   return (
     <div className="relative flex-1">
@@ -71,15 +104,20 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
       </div>
 
       {/* Suggestions Dropdown */}
-      {isFocused && query && suggestions.length > 0 && (
+      {isFocused && query.length >= 2 && (
         <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
-          {suggestions.map((s) => (
+          {isLoading && (
+            <div className="px-4 py-3 text-sm text-gray-400">Searching...</div>
+          )}
+
+          {!isLoading && suggestions.length > 0 && suggestions.map((s) => (
             <button
               key={s.key}
               className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-3"
               onClick={() => {
                 onAdd(s);
                 setQuery("");
+                setSuggestions([]);
               }}
             >
               {/* Color Dot */}
@@ -93,13 +131,10 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
               </div>
             </button>
           ))}
-        </div>
-      )}
 
-      {/* No Results */}
-      {isFocused && query && suggestions.length === 0 && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 px-4 py-3 text-sm text-gray-400">
-          No species found
+          {!isLoading && suggestions.length === 0 && (
+            <div className="px-4 py-3 text-sm text-gray-400">No species found</div>
+          )}
         </div>
       )}
     </div>

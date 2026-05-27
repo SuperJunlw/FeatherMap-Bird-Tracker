@@ -31,20 +31,12 @@ const INITIAL_VIEW = {
   bearing: 0,
 };
 
-const MOCK_SIGHTINGS: BirdSighting[] = Array.from({ length: 500 }, (_, i) => ({
-  latitude: 25 + Math.random() * 25,
-  longitude: -125 + Math.random() * 60,
-  year: 1990 + Math.floor(Math.random() * 35),
-  speciesKey: i % 2 === 0 ? "1" : "2",
-  color: i % 2 === 0 ? [239, 68, 68] : [59, 130, 246],
-}));
-
 export default function MapView({ sightings, currentYear, mapMode, onToggleMode }: Props) {
   const [viewState, setViewState] = useState(INITIAL_VIEW);
 
   const filteredSightings = useMemo(
     () =>
-      (sightings.length > 0 ? sightings : MOCK_SIGHTINGS).filter(
+      sightings.filter(
         (s) => s.year === currentYear
       ),
     [sightings, currentYear]
@@ -53,7 +45,10 @@ export default function MapView({ sightings, currentYear, mapMode, onToggleMode 
   const scatterLayer = new ScatterplotLayer<BirdSighting>({
     id: "scatter-layer",
     data: filteredSightings,
-    getPosition: (d) => [d.longitude, d.latitude],
+    getPosition: (d) => [       
+      d.longitude + (Math.random() - 0.5) * 0.4,
+      d.latitude + (Math.random() - 0.5) * 0.4,
+    ],
     getColor: (d) => [d.color[0], d.color[1], d.color[2], 180] as [number, number, number, number],
     getRadius: 8000,
     radiusMinPixels: 3,

@@ -30,12 +30,13 @@ def root():
 @app.get("/api/species/search")
 async def search_species(q: str = Query(..., min_length=2)):
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{GBIF_API}/species/suggest", params={"q": q, "limit": 10})
+        r = await client.get(f"{GBIF_API}/species/suggest", params={"q": q, "limit": 10, "higherTaxonKey": 212}) # 212 is the key for Aves (birds)
     results = r.json()
     return [
         {"key": s["key"], "name": s.get("canonicalName", s.get("scientificName", "")), "commonName": s.get("vernacularName", "")}
         for s in results
     ]
+
 ##Returns Image of species searched by species key
 @app.get("/api/species/{species_key}/image")
 async def get_species_image(species_key: int):
