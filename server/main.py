@@ -7,6 +7,7 @@ from collections import defaultdict
 import asyncio
 from pathlib import Path
 import json
+import statistics
 
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
@@ -132,14 +133,26 @@ async def get_analysis(species_key: int):
             year_lats[cell["year"]].append(cell["lat"])
             year_lons[cell["year"]].append(cell["lon"])
 
+    # centroids = []
+    # for year in sorted(year_lats.keys()):
+    #     lats = year_lats[year]
+    #     lons = year_lons[year]
+    #     centroids.append({
+    #         "year": year,
+    #         "lat": sum(lats) / len(lats),
+    #         "lon": sum(lons) / len(lons),
+    #         "count": len(lats),
+    #     })
+
+    # median instead of mean
     centroids = []
     for year in sorted(year_lats.keys()):
         lats = year_lats[year]
         lons = year_lons[year]
         centroids.append({
             "year": year,
-            "lat": sum(lats) / len(lats),
-            "lon": sum(lons) / len(lons),
+            "lat": statistics.median(lats),  
+            "lon": statistics.median(lons),
             "count": len(lats),
         })
 

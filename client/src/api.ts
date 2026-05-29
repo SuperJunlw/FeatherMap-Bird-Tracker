@@ -10,3 +10,13 @@ export async function getOccurrences(speciesKey: string) {
   const res = await fetch(`${BASE}/api/species/${speciesKey}/occurrences`);
   return res.json(); // returns [{ lat, lon, year, count }]
 }
+
+export async function getAnalysis(speciesKey: string) {
+  const res = await fetch(`${BASE}/api/species/${speciesKey}/analysis`);
+  return res.json();
+}
+
+export async function getHotspots(speciesKey: string) {
+  const res = await fetch(`${BASE}/api/species/${speciesKey}/hotspots`);
+  return res.json();
+}
