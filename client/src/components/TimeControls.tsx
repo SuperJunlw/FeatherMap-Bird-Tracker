@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
   currentYear: number;
@@ -12,20 +12,24 @@ const STEP = 2;
 export default function TimeControls({ currentYear, onYearChange }: Props) {
   const playingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const togglePlay = () => {
     if (playingRef.current) {
       // Pause
       playingRef.current = false;
+      setIsPlaying(false);
       if (intervalRef.current) clearInterval(intervalRef.current);
     } else {
       // Play — reset to start if at end
       if (currentYear >= MAX_YEAR) onYearChange(MIN_YEAR);
       playingRef.current = true;
+      setIsPlaying(true);
       intervalRef.current = setInterval(() => {
         onYearChange((prev) => {
           if (prev >= MAX_YEAR) {
             playingRef.current = false;
+            setIsPlaying(false);
             clearInterval(intervalRef.current!);
             return MAX_YEAR;
           }
@@ -47,7 +51,7 @@ export default function TimeControls({ currentYear, onYearChange }: Props) {
         onClick={togglePlay}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-green-500 text-white hover:bg-green-600 transition shrink-0"
       >
-        {playingRef.current ? "⏸" : "▶"}
+        {isPlaying ? "⏸" : "▶"}
       </button>
 
       {/* Slider */}

@@ -22,6 +22,7 @@ export interface HotspotData {
   type: "emerging" | "persistent" | "declining";
   early_count: number;
   recent_count: number;
+  speciesKey: string;
 }
 
 function App() {
@@ -29,18 +30,19 @@ function App() {
   const [sightings, setSightings] = useState<BirdSighting[]>([]);
   const [analyses, setAnalyses] = useState<SpeciesAnalysis[]>([]);
   const [hotspots, setHotspots] = useState<HotspotData[]>([]);
+  const [activeSpeciesKey, setActiveSpeciesKey] = useState<string | null>(null);
   const [currentYear, setCurrentYear] = useState(1990);
   const [mapMode, setMapMode] = useState<"dot" | "heatmap">("dot");
   const [loading, setLoading] = useState(false);
+  const [resetView, setResetView] = useState(0);
+  
 
   const handleAdd = async (s: Species) => {
     setSelectedSpecies((prev) => [...prev, s]);
-
-     // Switch back to dot mode if adding a second species
     if (selectedSpecies.length >= 1) {
       setMapMode("dot");
+      setResetView((v) => v + 1);
     }
-
     setLoading(true);
     try {
       const [occData, analysisData, hotspotData] = await Promise.all([
@@ -65,7 +67,7 @@ function App() {
 
       setHotspots((prev) => [
         ...prev,
-        ...hotspotData.hotspots,
+        ...hotspotData.hotspots.map((h: any) => ({ ...h, speciesKey: s.key })),
       ]);
     } catch (err) {
       console.error("Failed to load species data:", err);
@@ -78,8 +80,11 @@ function App() {
     setSelectedSpecies((prev) => prev.filter((x) => x.key !== s.key));
     setSightings((prev) => prev.filter((x) => x.speciesKey !== s.key));
     setAnalyses((prev) => prev.filter((x) => x.speciesKey !== s.key));
-    setHotspots([]);
+    setHotspots((prev) => prev.filter((x) => x.speciesKey !== s.key));
   };
+
+  // Filter hotspots to only show active species
+  const activeHotspots = hotspots.filter((h) => h.speciesKey === activeSpeciesKey);
 
   return (
     <div className="flex flex-col h-screen bg-white text-gray-900">
@@ -97,7 +102,12 @@ function App() {
           </div>
         </div>
         <div className="w-32 flex justify-end">
-          {loading && <span className="text-xs text-gray-400 animate-pulse">Loading...</span>}
+          {loading && (
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-green-500 animate-ping" />
+              <span className="text-xs text-gray-400">Fetching data...</span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -106,14 +116,15 @@ function App() {
           <MapView
             sightings={sightings}
             analyses={analyses}
-            hotspots={hotspots}
+            hotspots={activeHotspots}
             currentYear={currentYear}
             mapMode={mapMode}
             onToggleMode={() => setMapMode((prev) => (prev === "dot" ? "heatmap" : "dot"))}
             selectedSpecies={selectedSpecies}
+            resetView={resetView}
+            activeSpeciesKey={activeSpeciesKey}
           />
 
-          {/* Loading Overlay */}
           {loading && (
             <div className="absolute inset-0 z-20 bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
               <div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
@@ -121,7 +132,7 @@ function App() {
               <p className="text-xs text-gray-400">This may take a few seconds on first load</p>
             </div>
           )}
-          
+
           <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-white/80 to-transparent">
             <TimeControls
               currentYear={currentYear}
@@ -129,10 +140,12 @@ function App() {
             />
           </div>
         </div>
+
         <aside className="w-80 bg-white border-l border-gray-200 overflow-y-auto shrink-0">
           <SidePanel
             selectedSpecies={selectedSpecies}
             sightings={sightings}
+            onActiveKeyChange={setActiveSpeciesKey}
           />
         </aside>
       </main>

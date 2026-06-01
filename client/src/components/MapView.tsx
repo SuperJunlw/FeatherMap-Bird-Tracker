@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react"; 
 import { Map } from "react-map-gl";
 import DeckGL from "@deck.gl/react";
 import { ScatterplotLayer, PathLayer } from "@deck.gl/layers";
@@ -25,6 +25,8 @@ interface Props {
   mapMode: "dot" | "heatmap";
   onToggleMode: () => void;
   selectedSpecies: { key: string }[];
+  resetView: number;
+  activeSpeciesKey: string | null;
 }
 
 const INITIAL_VIEW = {
@@ -46,10 +48,14 @@ const HOTSPOT_COLORS: Record<string, [number, number, number, number]> = {
   declining:  [239, 68,  68,  200],
 };
 
-export default function MapView({ sightings, analyses, hotspots, currentYear, mapMode, onToggleMode, selectedSpecies }: Props) {
+export default function MapView({ sightings, analyses, hotspots, currentYear, mapMode, onToggleMode, selectedSpecies, resetView, activeSpeciesKey }: Props) {
   const [viewState, setViewState] = useState(INITIAL_VIEW);
   const [showCentroids, setShowCentroids] = useState(true);
   const [showHotspots, setShowHotspots] = useState(false);
+
+  useEffect(() => {
+    setShowHotspots(false);
+  }, [resetView]);
 
   const filteredSightings = useMemo(() => {
     let yearData = sightings.filter((s) => s.year === currentYear);
@@ -97,9 +103,13 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     visible: mapMode === "dot" && !showHotspots,
   });
 
+  const heatmapSightings = useMemo(() => {
+    return filteredSightings.filter((s) => s.speciesKey === activeSpeciesKey);
+  }, [filteredSightings, activeSpeciesKey]);
+
   const heatmapLayer = new HeatmapLayer<BirdSighting>({
     id: "heatmap-layer",
-    data: filteredSightings,
+    data: heatmapSightings,
     getPosition: (d) => [d.longitude, d.latitude],
     getWeight: 1,
     radiusPixels: 40,
@@ -114,7 +124,7 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     data: centroidPaths,
     getPath: (d) => d.path,
     getColor: (d) => [...d.color, 220] as [number, number, number, number],
-    getWidth: 3,
+    getWidth: 5,
     widthMinPixels: 2,
     visible: showCentroids && analyses.length > 0,
   });
@@ -125,12 +135,12 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     data: centroidDots,
     getPosition: (d: any) => [d.lon, d.lat],
     getColor: (d: any) => [...d.color, 255] as [number, number, number, number],
-    getRadius: 30000,
-    radiusMinPixels: 6,
-    radiusMaxPixels: 12,
+    getRadius: 60000,        // bigger than before
+    radiusMinPixels: 10,     // larger minimum
+    radiusMaxPixels: 20,     // larger maximum
     stroked: true,
     getLineColor: [255, 255, 255, 255],
-    lineWidthMinPixels: 2,
+    lineWidthMinPixels: 3,   // thicker white border
     visible: showCentroids && analyses.length > 0,
   });
 
@@ -179,17 +189,17 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
           </button>
           <button
             className={`text-xs px-3 py-1 rounded-md transition-all ${
-              mapMode === "heatmap" && selectedSpecies.length === 1
-                ? "bg-green-500 text-white font-semibold"
-                : selectedSpecies.length > 1
+              selectedSpecies.length === 0
                 ? "text-gray-300 cursor-not-allowed"
+                : mapMode === "heatmap"
+                ? "bg-green-500 text-white font-semibold"
                 : "text-gray-500 hover:bg-gray-100"
             }`}
-            onClick={() => mapMode !== "heatmap" && selectedSpecies.length === 1 && onToggleMode()}
-            title={selectedSpecies.length > 1 ? "Heatmap only available for single species" : ""}
+            onClick={() => selectedSpecies.length > 0 && onToggleMode()}
+            title={selectedSpecies.length === 0 ? "Search for a species first" : ""}
           >
             Heatmap
-        </button>
+          </button>
         </div>
 
         {/* Centroid trail toggle */}
@@ -207,14 +217,24 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
         {/* Hotspot toggle */}
         <button
           className={`text-xs px-3 py-1 rounded-lg border shadow-sm transition-all ${
-            showHotspots
+            selectedSpecies.length === 0
+              ? "text-gray-300 cursor-not-allowed bg-white border-gray-200"
+              : showHotspots
               ? "bg-orange-500 text-white border-orange-500"
               : "bg-white text-gray-500 border-gray-200 hover:bg-gray-100"
           }`}
-          onClick={() => setShowHotspots((v) => !v)}
+          onClick={() => selectedSpecies.length > 0 && setShowHotspots((v) => !v)}
+          title={selectedSpecies.length === 0 ? "Search for a species first" : ""}
         >
           Hotspots
         </button>
+
+        {/* Note */}
+        {selectedSpecies.length > 1 && (
+          <p className="text-xs text-gray-500 max-w-32 leading-snug drop-shadow-sm">
+            Heatmap & Hotspots show the side panel species only
+          </p>
+        )}
       </div>
 
       {/* Hotspot Legend */}

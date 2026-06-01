@@ -34,6 +34,8 @@ interface Props {
   onRemove: (s: Species) => void;
 }
 
+const MAX_SPECIES = 5;
+
 export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -74,12 +76,12 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
   return (
     <div className="relative flex-1">
       {/* Input Row */}
-      <div className="flex items-center flex-wrap gap-2 border border-gray-200 rounded-lg px-3 py-2 bg-white shadow-sm">
+      <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 bg-white shadow-sm overflow-x-auto">
         {/* Selected Species Tags */}
         {selectedSpecies.map((s) => (
           <span
             key={s.key}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded-full text-white font-medium"
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-full text-white font-medium shrink-0"
             style={{ backgroundColor: s.color }}
           >
             {s.commonName}
@@ -93,14 +95,20 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
         ))}
 
         {/* Search Input */}
-        <input
-          className="flex-1 outline-none text-sm text-gray-700 placeholder-gray-400 min-w-40"
-          placeholder="Search for a bird species..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setTimeout(() => setIsFocused(false), 150)}
-        />
+        {selectedSpecies.length < MAX_SPECIES && (
+          <input
+            className="flex-1 outline-none text-sm text-gray-700 placeholder-gray-400 min-w-40 shrink-0"
+            placeholder="Search for a bird species..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setTimeout(() => setIsFocused(false), 150)}
+          />
+        )}
+
+        {selectedSpecies.length >= MAX_SPECIES && (
+          <span className="text-xs text-gray-400 italic">Max {MAX_SPECIES} species</span>
+        )}
       </div>
 
       {/* Suggestions Dropdown */}
