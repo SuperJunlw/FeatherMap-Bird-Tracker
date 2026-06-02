@@ -13,6 +13,34 @@ CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 GBIF_API = "https://api.gbif.org/v1"
 
+import sqlite3
+
+DB_PATH = Path("cache.db")
+
+def _init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT)"
+        )
+
+_init_db()
+
+def cache_get(key: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT value FROM cache WHERE key = ?", (key,)
+        ).fetchone()
+    return json.loads(row[0]) if row else None
+
+def cache_set(key: str, value):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO cache (key, value) VALUES (?, ?)",
+            (key, json.dumps(value)),
+        )
+        conn.commit()
+
+
 app = FastAPI(title="FeatherMap API")
 
 app.add_middleware(
@@ -62,12 +90,9 @@ async def get_species_image(species_key: int):
 ##Gathers and aggregates data of the species attached input species key
 @app.get("/api/species/{species_key}/occurrences")
 async def get_occurrences(species_key: int):
-    cache_file = CACHE_DIR / f"{species_key}.json"
-    
-    # Return cached result if it exists
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
-
+    cached = cache_get(str(species_key))
+    if cached is not None:
+        return cached
     grid = defaultdict(int)
     years = list(range(1990, 2027, 2))
     per_year_limit = 3000
@@ -116,9 +141,51 @@ async def get_occurrences(species_key: int):
         for k, v in grid.items()
     ]
 
-    # Save to cache
-    cache_file.write_text(json.dumps(result))
+    # Save to db
+    cache_set(str(species_key), result)
     return result
+
+@app.get("/api/species/{species_key}/seasonal")
+async def get_seasonal(species_key: int):
+    cached = cache_get(str(species_key))
+    if cached is not None:
+        return cached
+
+    # Build 5 year windows from 1990 to 2026
+    windows = {}
+    start = 1990
+    while start <= 2026:
+        end = min(start + 4, 2026)
+        windows[f"{start}-{end}"] = (start, end)
+        start += 5
+
+    async def facet_window(client, lo, hi):
+        r = await client.get(f"{GBIF_API}/occurrence/search", params={
+            "speciesKey": species_key,
+            "hasCoordinate": True,
+            "year": f"{lo},{hi}",
+            "facet": "month",
+            "facetLimit": 12,
+            "limit": 0,
+        })
+        months = [0] * 12
+        data = r.json()
+        for facet in data.get("facets", []):
+            if facet.get("field") == "MONTH":
+                for entry in facet.get("counts", []):
+                    m = int(entry["name"])
+                    months[m - 1] = entry["count"]
+        return months
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        results = await asyncio.gather(*[
+            facet_window(client, lo, hi) for lo, hi in windows.values()
+        ])
+
+    seasonal_result = dict(zip(windows.keys(), results))
+    
+    cache_set(f"{species_key}_seasonal", seasonal_result)
+    return seasonal_result
 
 ##Analysis section centroid implemented
 @app.get("/api/species/{species_key}/analysis")
@@ -190,52 +257,57 @@ async def get_analysis(species_key: int):
 
 @app.get("/api/species/{species_key}/hotspots")
 async def get_hotspots(species_key: int):
-    try:
-        data = await get_occurrences(species_key)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    data = await get_occurrences(species_key)
 
-    if not data:
-        return {"hotspots": [], "summary": {"emerging": 0, "declining": 0, "persistent": 0}}
-    
-    # Group counts by grid cell across early vs recent years
     early = defaultdict(int)   # 1990-2005
     recent = defaultdict(int)  # 2010-2026
-    
     for cell in data:
         key = (cell["lat"], cell["lon"])
         if cell["year"] <= 2005:
             early[key] += cell["count"]
         elif cell["year"] >= 2010:
             recent[key] += cell["count"]
-    
-    all_cells = set(early.keys()) | set(recent.keys())
+
+    early_total = sum(early.values())
+    recent_total = sum(recent.values())
+    if early_total == 0 or recent_total == 0:
+        raise HTTPException(status_code=400,
+            detail="Not enough data in one of the time periods")
+
+    SCALE = 10000
+    all_cells = set(early) | set(recent)
     hotspots = []
-    
     for cell in all_cells:
-        e = early.get(cell, 0)
-        r = recent.get(cell, 0)
-        
-        if r > e * 2 and r > 10:
+        e_raw = early.get(cell, 0)
+        r_raw = recent.get(cell, 0)
+
+        if e_raw + r_raw < 15:
+            continue
+
+        e = e_raw / early_total * SCALE     
+        r = r_raw / recent_total * SCALE    
+
+        if r > e * 2 and r > 50:
             kind = "emerging"
-        elif e > r * 2 and e > 10:
+        elif e > r * 2 and e > 50:
             kind = "declining"
-        elif e > 10 and r > 10:
+        elif e > 50 and r > 50:
             kind = "persistent"
         else:
             continue
-            
+
         hotspots.append({
             "lat": cell[0], "lon": cell[1],
             "type": kind,
-            "early_count": e,
-            "recent_count": r
+            "early_count": e_raw,
+            "recent_count": r_raw,
+            "early_share": round(e, 1),
+            "recent_share": round(r, 1),
         })
-    
+
     summary = {
         "emerging": len([h for h in hotspots if h["type"] == "emerging"]),
         "declining": len([h for h in hotspots if h["type"] == "declining"]),
         "persistent": len([h for h in hotspots if h["type"] == "persistent"]),
     }
-    
     return {"hotspots": hotspots, "summary": summary}
