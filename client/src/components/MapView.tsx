@@ -27,6 +27,7 @@ interface Props {
   selectedSpecies: { key: string }[];
   resetView: number;
   activeSpeciesKey: string | null;
+  dataTrigger: number;
 }
 
 const INITIAL_VIEW = {
@@ -43,12 +44,12 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 const HOTSPOT_COLORS: Record<string, [number, number, number, number]> = {
-  emerging:   [34,  197, 94,  200],
-  persistent: [59,  130, 246, 200],
-  declining:  [239, 68,  68,  200],
+  emerging:   [16,  185, 129, 210],  // emerald (distinct from species green)
+  persistent: [245, 158, 11,  210],  // amber
+  declining:  [220, 38,  127, 210],  // rose/pink
 };
 
-export default function MapView({ sightings, analyses, hotspots, currentYear, mapMode, onToggleMode, selectedSpecies, resetView, activeSpeciesKey }: Props) {
+export default function MapView({ sightings, analyses, hotspots, currentYear, mapMode, onToggleMode, selectedSpecies, resetView, activeSpeciesKey, dataTrigger }: Props) {
   const [viewState, setViewState] = useState(INITIAL_VIEW);
   const [showCentroids, setShowCentroids] = useState(true);
   const [showHotspots, setShowHotspots] = useState(false);
@@ -57,16 +58,23 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     setShowHotspots(false);
   }, [resetView]);
 
+  useEffect(() => {
+    if (mapMode === "heatmap" || showHotspots) {
+      setShowCentroids(false);
+    }
+  }, [mapMode, showHotspots]);
+
   const filteredSightings = useMemo(() => {
     let yearData = sightings.filter((s) => s.year === currentYear);
     if (yearData.length === 0) {
-      for (let offset = 1; offset <= 2; offset++) {
-        yearData = sightings.filter((s) => s.year === currentYear - offset);
-        if (yearData.length > 0) break;
+      // find the closest year with data
+      const availableYears = [...new Set(sightings.map((s) => s.year))].sort((a, b) => Math.abs(a - currentYear) - Math.abs(b - currentYear));
+      if (availableYears.length > 0) {
+        yearData = sightings.filter((s) => s.year === availableYears[0]);
       }
     }
     return yearData;
-  }, [sightings, currentYear]);
+  }, [sightings, currentYear, dataTrigger]);
 
   // Build centroid trail paths up to currentYear
   const centroidPaths = useMemo(() =>
@@ -88,26 +96,23 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     }).filter(Boolean),
   [analyses, currentYear]);
 
-  const scatterLayer = new ScatterplotLayer<BirdSighting>({
+  const scatterLayer = useMemo(() => new ScatterplotLayer<BirdSighting>({
     id: "scatter-layer",
     data: filteredSightings,
-    getPosition: (d) => [
-      d.longitude + (Math.random() - 0.5) * 0.3,
-      d.latitude + (Math.random() - 0.5) * 0.3,
-    ],
+    getPosition: (d) => [d.longitude, d.latitude], // remove Math.random here
     getColor: (d) => [d.color[0], d.color[1], d.color[2], 180],
     getRadius: 8000,
     radiusMinPixels: 3,
     radiusMaxPixels: 10,
     pickable: true,
     visible: mapMode === "dot" && !showHotspots,
-  });
+  }), [filteredSightings, mapMode, showHotspots]);
 
   const heatmapSightings = useMemo(() => {
     return filteredSightings.filter((s) => s.speciesKey === activeSpeciesKey);
   }, [filteredSightings, activeSpeciesKey]);
 
-  const heatmapLayer = new HeatmapLayer<BirdSighting>({
+  const heatmapLayer = useMemo(() => new HeatmapLayer<BirdSighting>({
     id: "heatmap-layer",
     data: heatmapSightings,
     getPosition: (d) => [d.longitude, d.latitude],
@@ -116,10 +121,9 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     intensity: 1,
     threshold: 0.03,
     visible: mapMode === "heatmap" && !showHotspots,
-  });
+  }), [heatmapSightings, mapMode, showHotspots]);
 
-  // Centroid trail lines
-  const centroidTrailLayer = new PathLayer({
+  const centroidTrailLayer = useMemo(() => new PathLayer({
     id: "centroid-trail",
     data: centroidPaths,
     getPath: (d) => d.path,
@@ -127,25 +131,23 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     getWidth: 5,
     widthMinPixels: 2,
     visible: showCentroids && analyses.length > 0,
-  });
+  }), [centroidPaths, showCentroids, analyses.length]);
 
-  // Centroid current position dots
-  const centroidDotLayer = new ScatterplotLayer({
+  const centroidDotLayer = useMemo(() => new ScatterplotLayer({
     id: "centroid-dots",
     data: centroidDots,
     getPosition: (d: any) => [d.lon, d.lat],
     getColor: (d: any) => [...d.color, 255] as [number, number, number, number],
-    getRadius: 60000,        // bigger than before
-    radiusMinPixels: 10,     // larger minimum
-    radiusMaxPixels: 20,     // larger maximum
+    getRadius: 60000,
+    radiusMinPixels: 10,
+    radiusMaxPixels: 20,
     stroked: true,
     getLineColor: [255, 255, 255, 255],
-    lineWidthMinPixels: 3,   // thicker white border
+    lineWidthMinPixels: 3,
     visible: showCentroids && analyses.length > 0,
-  });
+  }), [centroidDots, showCentroids, analyses.length]);
 
-  // Hotspot layer
-  const hotspotLayer = new ScatterplotLayer<HotspotData>({
+  const hotspotLayer = useMemo(() => new ScatterplotLayer<HotspotData>({
     id: "hotspot-layer",
     data: hotspots,
     getPosition: (d) => [d.lon, d.lat],
@@ -155,7 +157,7 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     radiusMaxPixels: 20,
     pickable: true,
     visible: showHotspots,
-  });
+  }), [hotspots, showHotspots]);
 
   const handleViewStateChange = ({ viewState: vs }: ViewStateChangeParameters) => {
     setViewState(vs as typeof INITIAL_VIEW);
@@ -240,9 +242,9 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
       {/* Hotspot Legend */}
       {showHotspots && (
         <div className="absolute top-4 right-4 z-10 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm text-xs flex flex-col gap-1">
-          <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-green-500" /> Emerging</div>
-          <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-blue-500" /> Persistent</div>
-          <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> Declining</div>
+          <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500" /> Emerging</div>
+          <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Persistent</div>
+          <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-pink-600" /> Declining</div>
         </div>
       )}
 

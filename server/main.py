@@ -76,23 +76,26 @@ async def get_occurrences(species_key: int):
     async def fetch_year(client, year):
         records = []
         offset = 0
-        while offset < per_year_limit:
-            r = await client.get(f"{GBIF_API}/occurrence/search", params={
-                "speciesKey": species_key,
-                "hasCoordinate": True,
-                "hasGeospatialIssue": False,
-                "year": year,
-                "limit": page_size,
-                "offset": offset,
-            })
-            data = r.json()
-            if not isinstance(data, dict):
-                break
-            batch = data.get("results", [])
-            records.extend(batch)
-            if data.get("endOfRecords", True):
-                break
-            offset += page_size
+        try:
+            while offset < per_year_limit:
+                r = await client.get(f"{GBIF_API}/occurrence/search", params={
+                    "speciesKey": species_key,
+                    "hasCoordinate": True,
+                    "hasGeospatialIssue": False,
+                    "year": year,
+                    "limit": page_size,
+                    "offset": offset,
+                })
+                data = r.json()
+                if not isinstance(data, dict):
+                    break
+                batch = data.get("results", [])
+                records.extend(batch)
+                if data.get("endOfRecords", True):
+                    break
+                offset += page_size
+        except Exception:
+            pass
         return records
 
     async with httpx.AsyncClient(timeout=60) as client:
@@ -120,7 +123,10 @@ async def get_occurrences(species_key: int):
 ##Analysis section centroid implemented
 @app.get("/api/species/{species_key}/analysis")
 async def get_analysis(species_key: int):
-    data = await get_occurrences(species_key)
+    try:
+        data = await get_occurrences(species_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     if not data:
         raise HTTPException(status_code=404, detail="No occurrence data found")
@@ -149,6 +155,8 @@ async def get_analysis(species_key: int):
     for year in sorted(year_lats.keys()):
         lats = year_lats[year]
         lons = year_lons[year]
+        if not lats or not lons:  
+            continue
         centroids.append({
             "year": year,
             "lat": statistics.median(lats),  
@@ -182,7 +190,13 @@ async def get_analysis(species_key: int):
 
 @app.get("/api/species/{species_key}/hotspots")
 async def get_hotspots(species_key: int):
-    data = await get_occurrences(species_key)
+    try:
+        data = await get_occurrences(species_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not data:
+        return {"hotspots": [], "summary": {"emerging": 0, "declining": 0, "persistent": 0}}
     
     # Group counts by grid cell across early vs recent years
     early = defaultdict(int)   # 1990-2005

@@ -35,6 +35,8 @@ function App() {
   const [mapMode, setMapMode] = useState<"dot" | "heatmap">("dot");
   const [loading, setLoading] = useState(false);
   const [resetView, setResetView] = useState(0);
+  const [dataTrigger, setDataTrigger] = useState(0);
+  const [readyKeys, setReadyKeys] = useState<Set<string>>(new Set());
   
 
   const handleAdd = async (s: Species) => {
@@ -46,9 +48,9 @@ function App() {
     setLoading(true);
     try {
       const [occData, analysisData, hotspotData] = await Promise.all([
-        getOccurrences(s.key),
-        getAnalysis(s.key),
-        getHotspots(s.key),
+        getOccurrences(s.key).catch(() => []),
+        getAnalysis(s.key).catch(() => ({ centroids: [], trend: {} })),
+        getHotspots(s.key).catch(() => ({ hotspots: [] })),
       ]);
 
       const newSightings: BirdSighting[] = occData.map((d: any) => ({
@@ -60,15 +62,20 @@ function App() {
       }));
       setSightings((prev) => [...prev, ...newSightings]);
 
-      setAnalyses((prev) => [
-        ...prev,
-        { speciesKey: s.key, color: s.color, centroids: analysisData.centroids },
-      ]);
+      if (analysisData?.centroids) {
+        setAnalyses((prev) => [
+          ...prev,
+          { speciesKey: s.key, color: s.color, centroids: analysisData.centroids },
+        ]);
+      }
 
       setHotspots((prev) => [
         ...prev,
         ...hotspotData.hotspots.map((h: any) => ({ ...h, speciesKey: s.key })),
       ]);
+
+      setDataTrigger((v) => v + 1);
+      setReadyKeys((prev) => new Set([...prev, s.key]));
     } catch (err) {
       console.error("Failed to load species data:", err);
     } finally {
@@ -81,6 +88,12 @@ function App() {
     setSightings((prev) => prev.filter((x) => x.speciesKey !== s.key));
     setAnalyses((prev) => prev.filter((x) => x.speciesKey !== s.key));
     setHotspots((prev) => prev.filter((x) => x.speciesKey !== s.key));
+
+    setReadyKeys((prev) => {
+      const next = new Set(prev);
+      next.delete(s.key);
+      return next;
+    });
   };
 
   // Filter hotspots to only show active species
@@ -123,6 +136,7 @@ function App() {
             selectedSpecies={selectedSpecies}
             resetView={resetView}
             activeSpeciesKey={activeSpeciesKey}
+            dataTrigger={dataTrigger}
           />
 
           {loading && (
@@ -146,6 +160,7 @@ function App() {
             selectedSpecies={selectedSpecies}
             sightings={sightings}
             onActiveKeyChange={setActiveSpeciesKey}
+            readyKeys={readyKeys}
           />
         </aside>
       </main>

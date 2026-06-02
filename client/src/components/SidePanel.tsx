@@ -6,10 +6,36 @@ import { getAnalysis, getHotspots } from "../api";
 
 const BASE = "http://localhost:8000";
 
+async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10`,
+      { headers: { "Accept-Language": "en" } }
+    );
+    const data = await res.json();
+    const addr = data.address;
+
+    const city = addr?.city ?? addr?.town ?? addr?.village ?? addr?.hamlet ?? addr?.municipality;
+    const subregion = addr?.county ?? addr?.state_district;
+    const state = addr?.state ?? addr?.region;
+    const country = addr?.country;
+
+    // Build from most to least specific, but always include country
+    if (city && state) return `${city}, ${state}, ${country}`;
+    if (city) return `${city}, ${country}`;
+    if (subregion) return `${subregion}, ${country}`;
+    if (state) return `${state}, ${country}`;
+    return country ?? `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`;
+  } catch {
+    return `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`;
+  }
+}
+
 interface Props {
   selectedSpecies: Species[];
   sightings: BirdSighting[];
   onActiveKeyChange: (key: string | null) => void;
+  readyKeys: Set<string>;
 }
 
 interface SpeciesImage {
@@ -17,7 +43,7 @@ interface SpeciesImage {
   publisher: string;
 }
 
-export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChange }: Props) {
+export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChange, readyKeys }: Props) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [image, setImage] = useState<SpeciesImage | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
@@ -27,6 +53,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
   const [showObservations, setShowObservations] = useState(false);
   const [showCentroid, setShowCentroid] = useState(false);
   const [showHotspotSummary, setShowHotspotSummary] = useState(false);
+  const [locationLabels, setLocationLabels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (selectedSpecies.length > 0) {
@@ -42,7 +69,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
   }, [activeKey]);
 
   useEffect(() => {
-    if (!activeKey) return;
+    if (!activeKey || !readyKeys.has(activeKey)) return;
     setImageLoading(true);
     setImage(null);
     fetch(`${BASE}/api/species/${activeKey}/image`)
@@ -50,10 +77,10 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
       .then((data) => setImage(data))
       .catch(() => setImage(null))
       .finally(() => setImageLoading(false));
-  }, [activeKey]);
+  }, [activeKey, readyKeys]);
 
   useEffect(() => {
-    if (!activeKey) return;
+    if (!activeKey || !readyKeys.has(activeKey)) return;
     setAnalysisLoading(true);
     setAnalysis(null);
     setHotspots(null);
@@ -64,7 +91,21 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
       })
       .catch(console.error)
       .finally(() => setAnalysisLoading(false));
-  }, [activeKey]);
+  }, [activeKey, readyKeys]);
+
+  useEffect(() => {
+    if (!hotspots?.hotspots) return;
+    const top5 = [...hotspots.hotspots]
+      .sort((a: any, b: any) => b.recent_count - a.recent_count)
+      .slice(0, 5);
+
+    top5.forEach(async (h: any) => {
+      const key = `${h.lat},${h.lon}`;
+      if (locationLabels[key]) return; // already cached
+      const label = await reverseGeocode(h.lat, h.lon);
+      setLocationLabels((prev) => ({ ...prev, [key]: label }));
+    });
+  }, [hotspots]);
 
   const activeSpecies = selectedSpecies.find((s) => s.key === activeKey);
 
@@ -111,7 +152,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
       {/* Species Info Card */}
       {activeSpecies && (
         <div className="p-4 border-b border-gray-100">
-          <div className="w-full h-32 rounded-lg overflow-hidden bg-gray-100 mb-3 flex items-center justify-center">
+          <div className="w-full h-40 rounded-lg overflow-hidden bg-gray-100 mb-3 flex items-center justify-center">
             {imageLoading && (
               <span className="text-xs text-gray-400 animate-pulse">Loading image...</span>
             )}
@@ -239,23 +280,51 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
         </button>
         {showHotspotSummary && (
           hotspots?.summary ? (
-            <div className="flex gap-2">
-              <div className="flex-1 rounded-lg bg-green-50 border border-green-100 p-2 text-center">
-                <div className="text-lg font-bold text-green-600">{hotspots.summary.emerging}</div>
-                <div className="text-xs text-green-500 font-medium">Emerging</div>
-                <div className="text-xs text-gray-400 mt-0.5">Growing since 2010</div>
+            <>
+              {/* Summary Cards */}
+              <div className="flex gap-2 mb-4">
+                <div className="flex-1 rounded-lg bg-emerald-50 border border-emerald-100 p-2 text-center">
+                  <div className="text-lg font-bold text-emerald-600">{hotspots.summary.emerging}</div>
+                  <div className="text-xs text-emerald-500 font-medium">Emerging</div>
+                  <div className="text-xs text-gray-400 mt-0.5">Growing since 2010</div>
+                </div>
+                <div className="flex-1 rounded-lg bg-amber-50 border border-amber-100 p-2 text-center">
+                  <div className="text-lg font-bold text-amber-500">{hotspots.summary.persistent}</div>
+                  <div className="text-xs text-amber-400 font-medium">Persistent</div>
+                  <div className="text-xs text-gray-400 mt-0.5">Active all decades</div>
+                </div>
+                <div className="flex-1 rounded-lg bg-pink-50 border border-pink-100 p-2 text-center">
+                  <div className="text-lg font-bold text-pink-600">{hotspots.summary.declining}</div>
+                  <div className="text-xs text-pink-500 font-medium">Declining</div>
+                  <div className="text-xs text-gray-400 mt-0.5">Reduced since 2010</div>
+                </div>
               </div>
-              <div className="flex-1 rounded-lg bg-blue-50 border border-blue-100 p-2 text-center">
-                <div className="text-lg font-bold text-blue-600">{hotspots.summary.persistent}</div>
-                <div className="text-xs text-blue-500 font-medium">Persistent</div>
-                <div className="text-xs text-gray-400 mt-0.5">Active all decades</div>
-              </div>
-              <div className="flex-1 rounded-lg bg-red-50 border border-red-100 p-2 text-center">
-                <div className="text-lg font-bold text-red-600">{hotspots.summary.declining}</div>
-                <div className="text-xs text-red-500 font-medium">Declining</div>
-                <div className="text-xs text-gray-400 mt-0.5">Reduced since 2010</div>
-              </div>
-            </div>
+
+              {/* Top Locations */}
+              {hotspots?.hotspots?.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Top Locations</p>
+                  {[...hotspots.hotspots]
+                    .sort((a: any, b: any) => b.recent_count - a.recent_count)
+                    .slice(0, 5)
+                    .map((h: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-gray-50">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${
+                            h.type === "emerging" ? "bg-emerald-500" :
+                            h.type === "persistent" ? "bg-amber-400" : "bg-pink-600"
+                          }`} />
+                          <span className="text-gray-600">
+                            {locationLabels[`${h.lat},${h.lon}`] ?? `${h.lat.toFixed(1)}°, ${h.lon.toFixed(1)}°`}
+                          </span>
+                        </div>
+                        <span className="text-gray-400">{h.recent_count} obs</span>
+                      </div>
+                    ))
+                  }
+                </div>
+              )}
+            </>
           ) : (
             !analysisLoading && <div className="text-xs text-gray-400 text-center py-4">No hotspot data</div>
           )
