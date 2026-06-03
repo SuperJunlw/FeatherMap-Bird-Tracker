@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import type { Species } from "./SearchBar";
 import type { BirdSighting } from "./MapView";
-import { getAnalysis, getHotspots } from "../api";
+import { getAnalysis, getHotspots, getSeasonal } from "../api";
 
 const BASE = "http://localhost:8000";
 
@@ -54,6 +54,10 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
   const [showCentroid, setShowCentroid] = useState(false);
   const [showHotspotSummary, setShowHotspotSummary] = useState(false);
   const [locationLabels, setLocationLabels] = useState<Record<string, string>>({});
+  const [seasonal, setSeasonal] = useState<any>(null);
+  const [showSeasonal, setShowSeasonal] = useState(false);
+  const [windowA, setWindowA] = useState<string | null>(null);
+  const [windowB, setWindowB] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedSpecies.length > 0) {
@@ -84,10 +88,14 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
     setAnalysisLoading(true);
     setAnalysis(null);
     setHotspots(null);
-    Promise.all([getAnalysis(activeKey), getHotspots(activeKey)])
-      .then(([analysisData, hotspotsData]) => {
+    setSeasonal(null);
+    setWindowA(null);
+    setWindowB(null);
+    Promise.all([getAnalysis(activeKey), getHotspots(activeKey), getSeasonal(activeKey)])
+      .then(([analysisData, hotspotsData, seasonalData]) => {
         setAnalysis(analysisData);
         setHotspots(hotspotsData);
+        setSeasonal(seasonalData)
       })
       .catch(console.error)
       .finally(() => setAnalysisLoading(false));
@@ -185,9 +193,12 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
           className="w-full flex items-center justify-between mb-3"
           onClick={() => setShowObservations((v) => !v)}
         >
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Observations Per Year
-          </h3>
+          <div className="flex flex-col items-start gap-0.5">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Observations Per Year
+            </h3>
+            <p className="text-[10px] text-gray-400 normal-case font-normal">Sampled sight from GBIF. Number of grid cells with sightings per year, each cell aggregates multiple raw records into one point</p>
+          </div>
           <span className="text-gray-400 text-xs">{showObservations ? "▲" : "▼"}</span>
         </button>
         {showObservations && (
@@ -221,9 +232,12 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
           className="w-full flex items-center justify-between mb-1"
           onClick={() => setShowCentroid((v) => !v)}
         >
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Centroid Latitude Over Time
-          </h3>
+          <div className="flex flex-col items-start gap-0.5">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Centroid Latitude Over Time
+            </h3>
+            <p className="text-xs text-gray-400 normal-case font-normal">Median latitude of sightings per year</p>
+          </div>
           <span className="text-gray-400 text-xs">{showCentroid ? "▲" : "▼"}</span>
         </button>
         {showCentroid && (
@@ -267,15 +281,99 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
         )}
       </div>
 
+      {/* Seasonal Pattern */}
+      <div className="p-4 border-b border-gray-100">
+        <button
+          className="w-full flex items-center justify-between mb-3"
+          onClick={() => setShowSeasonal((v) => !v)}
+        >
+          <div className="flex flex-col items-start gap-0.5">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Seasonal Pattern
+            </h3>
+            <p className="text-[10px] text-gray-400 normal-case font-normal">Compare monthly sighting counts across two periods. Total GBIF records by month, unsampled</p>
+          </div>
+          <span className="text-gray-400 text-xs">{showSeasonal ? "▲" : "▼"}</span>
+        </button>
+        {showSeasonal && (
+          analysisLoading ? (
+            <div className="text-xs text-gray-400 text-center py-8 animate-pulse">Loading...</div>
+          ) : seasonal ? (
+            (() => {
+              const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+              const windows = Object.keys(seasonal).filter(w => w !== "2025-2026");
+              const a = windowA ?? windows[0];
+              const b = windowB ?? windows[windows.length - 1];
+              const dataA = seasonal[a] as number[];
+              const dataB = seasonal[b] as number[];
+              const chartData = MONTHS.map((month, i) => ({
+                month,
+                [a]: dataA[i],
+                [b]: dataB[i],
+              }));
+              return (
+                <>
+                  <div className="flex items-center gap-2 mb-3">
+                    <select
+                      className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 outline-none text-gray-600"
+                      value={a}
+                      onChange={(e) => setWindowA(e.target.value)}
+                    >
+                      {windows.map(w => (
+                        <option key={w} value={w}>{w}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-gray-400 shrink-0">vs</span>
+                    <select
+                      className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 outline-none text-gray-600"
+                      value={b}
+                      onChange={(e) => setWindowB(e.target.value)}
+                    >
+                      {windows.map(w => (
+                        <option key={w} value={w}>{w}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <ResponsiveContainer width="100%" height={140}>
+                    <LineChart data={chartData}>
+                      <XAxis dataKey="month" tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={55} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                      <Line type="monotone" dataKey={a} stroke="#94a3b8" strokeWidth={2} dot={false} name={a} />
+                      <Line type="monotone" dataKey={b} stroke={activeSpecies?.color ?? "#22c55e"} strokeWidth={2} dot={false} name={b} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                  <div className="flex items-center gap-4 mt-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-4 h-0.5 bg-slate-400 inline-block" />
+                      <span className="text-[10px] text-gray-500">{a}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-4 h-0.5 inline-block" style={{ backgroundColor: activeSpecies?.color ?? "#22c55e" }} />
+                      <span className="text-[10px] text-gray-500">{b}</span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()
+          ) : (
+            <div className="text-xs text-gray-400 text-center py-8">No data available</div>
+          )
+        )}
+      </div>
+
       {/* Hotspot Summary */}
-      <div className="p-4">
+      <div className="p-4 border-b border-gray-100">
         <button
           className="w-full flex items-center justify-between mb-3"
           onClick={() => setShowHotspotSummary((v) => !v)}
         >
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Hotspot Summary
-          </h3>
+          <div className="flex flex-col items-start gap-0.5">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Hotspot Summary
+            </h3>
+            <p className="text-xs text-gray-400 normal-case font-normal">Grid cells by density change: 1990–2005 vs 2010–2026</p>
+          </div>
           <span className="text-gray-400 text-xs">{showHotspotSummary ? "▲" : "▼"}</span>
         </button>
         {showHotspotSummary && (

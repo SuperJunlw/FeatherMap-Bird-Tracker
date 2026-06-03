@@ -53,6 +53,18 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
   const [viewState, setViewState] = useState(INITIAL_VIEW);
   const [showCentroids, setShowCentroids] = useState(true);
   const [showHotspots, setShowHotspots] = useState(false);
+  const [trailProgress, setTrailProgress] = useState(0);
+  const [centroidTooltip, setCentroidTooltip] = useState<{
+    x: number;
+    y: number;
+    lat: number;
+    lon: number;
+    year: number;
+    count: number;
+    gridCells: number;
+    color: string;
+  } | null>(null);
+  const [hoveredCentroidKey, setHoveredCentroidKey] = useState<string | null>(null);
 
   useEffect(() => {
     setShowHotspots(false);
@@ -63,6 +75,23 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
       setShowCentroids(false);
     }
   }, [mapMode, showHotspots]);
+
+  useEffect(() => {
+    setTrailProgress(0);
+    let start: number | null = null;
+    const duration = 900; // ms for the trail to fully draw
+
+    const animate = (timestamp: number) => {
+      if (!start) start = timestamp;
+      const elapsed = timestamp - start;
+      const progress = Math.min(elapsed / duration, 1);
+      setTrailProgress(progress);
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+
+    const raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
+  }, [currentYear, analyses]);
 
   const filteredSightings = useMemo(() => {
     let yearData = sightings.filter((s) => s.year === currentYear);
@@ -77,14 +106,35 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
   }, [sightings, currentYear, dataTrigger]);
 
   // Build centroid trail paths up to currentYear
-  const centroidPaths = useMemo(() =>
-    analyses.map((a) => ({
-      path: a.centroids
+  const centroidPaths = useMemo(() => {
+    return analyses.map((a) => {
+      const fullPath = a.centroids
         .filter((c) => c.year <= currentYear)
-        .map((c) => [c.lon, c.lat] as [number, number]),
-      color: hexToRgb(a.color),
-    })).filter((p) => p.path.length >= 2),
-  [analyses, currentYear]);
+        .map((c) => [c.lon, c.lat] as [number, number]);
+
+      if (fullPath.length < 2) return null;
+
+      // Interpolate path up to trailProgress
+      const totalPoints = fullPath.length;
+      const targetIndex = trailProgress * (totalPoints - 1);
+      const endIndex = Math.floor(targetIndex);
+      const fraction = targetIndex - endIndex;
+
+      const animatedPath = fullPath.slice(0, endIndex + 1);
+
+      // Interpolate the last point
+      if (endIndex < totalPoints - 1) {
+        const p1 = fullPath[endIndex];
+        const p2 = fullPath[endIndex + 1];
+        animatedPath.push([
+          p1[0] + (p2[0] - p1[0]) * fraction,
+          p1[1] + (p2[1] - p1[1]) * fraction,
+        ]);
+      }
+
+      return { path: animatedPath, color: hexToRgb(a.color) };
+    }).filter((p): p is { path: [number, number][]; color: [number, number, number] } => p !== null);
+  }, [analyses, currentYear, trailProgress]);
 
   // Current centroid dots
   const centroidDots = useMemo(() =>
@@ -92,9 +142,18 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
       const closest = [...a.centroids]
         .filter((c) => c.year <= currentYear)
         .at(-1);
-      return closest ? { lon: closest.lon, lat: closest.lat, color: hexToRgb(a.color) } : null;
+      const gridCells = filteredSightings.filter((s) => s.speciesKey === a.speciesKey).length;
+      return closest ? {
+        lon: closest.lon,
+        lat: closest.lat,
+        year: closest.year,
+        count: closest.count,
+        gridCells,
+        color: hexToRgb(a.color),
+        colorHex: a.color,
+      } : null;
     }).filter(Boolean),
-  [analyses, currentYear]);
+  [analyses, currentYear, filteredSightings]);
 
   const scatterLayer = useMemo(() => new ScatterplotLayer<BirdSighting>({
     id: "scatter-layer",
@@ -131,21 +190,46 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
     getWidth: 5,
     widthMinPixels: 2,
     visible: showCentroids && analyses.length > 0,
-  }), [centroidPaths, showCentroids, analyses.length]);
+  }), [centroidPaths, showCentroids, analyses.length, trailProgress]);
 
   const centroidDotLayer = useMemo(() => new ScatterplotLayer({
     id: "centroid-dots",
     data: centroidDots,
     getPosition: (d: any) => [d.lon, d.lat],
     getColor: (d: any) => [...d.color, 255] as [number, number, number, number],
-    getRadius: 60000,
+    getRadius: (d: any) => {
+      const key = `${d.lat},${d.lon}`;
+      return key === hoveredCentroidKey ? 90000 : 60000;
+    },
     radiusMinPixels: 10,
-    radiusMaxPixels: 20,
+    radiusMaxPixels: 28,
     stroked: true,
     getLineColor: [255, 255, 255, 255],
     lineWidthMinPixels: 3,
-    visible: showCentroids && analyses.length > 0,
-  }), [centroidDots, showCentroids, analyses.length]);
+    visible: showCentroids && analyses.length > 0 && trailProgress >= 1,
+    pickable: true,
+    onHover: (info: any) => {
+      if (info.object) {
+        setHoveredCentroidKey(`${info.object.lat},${info.object.lon}`);
+        setCentroidTooltip({
+          x: info.x,
+          y: info.y,
+          lat: info.object.lat,
+          lon: info.object.lon,
+          year: info.object.year,
+          count: info.object.count,
+          gridCells: info.object.gridCells,
+          color: info.object.colorHex,
+        });
+      } else {
+        setHoveredCentroidKey(null);
+        setCentroidTooltip(null);
+      }
+    },
+    updateTriggers: {
+      getRadius: [hoveredCentroidKey],
+    },
+  }), [centroidDots, showCentroids, analyses.length, trailProgress, hoveredCentroidKey]);
 
   const hotspotLayer = useMemo(() => new ScatterplotLayer<HotspotData>({
     id: "hotspot-layer",
@@ -258,6 +342,23 @@ export default function MapView({ sightings, analyses, hotspots, currentYear, ma
       <div className="absolute bottom-20 left-4 z-10 bg-white/90 border border-gray-200 rounded-lg px-3 py-1 text-xs text-gray-600 shadow-sm">
         {filteredSightings.length.toLocaleString()} sightings in {currentYear}
       </div>
+
+      {/* Centroid Tooltip */}
+      {centroidTooltip && (
+        <div
+          className="absolute z-30 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs pointer-events-none"
+          style={{ left: centroidTooltip.x + 12, top: centroidTooltip.y - 10 }}
+        >
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: centroidTooltip.color }} />
+            <span className="font-semibold text-gray-700">Year {centroidTooltip.year}</span>
+          </div>
+          <div className="text-gray-500">Lat: {centroidTooltip.lat.toFixed(2)}°</div>
+          <div className="text-gray-500">Lon: {centroidTooltip.lon.toFixed(2)}°</div>
+          <div className="text-gray-500">Grid cells with sightings: {centroidTooltip.gridCells.toLocaleString()}</div>
+          <div className="text-gray-500">Raw records: {centroidTooltip.count.toLocaleString()}</div>
+        </div>
+      )}
     </div>
   );
 }
