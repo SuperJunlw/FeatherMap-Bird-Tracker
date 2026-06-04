@@ -9,18 +9,6 @@ export interface Species {
   color: string;
 }
 
-// --- Mock Species List ---
-// const MOCK_SPECIES: Species[] = [
-//   { key: "1", commonName: "American Robin", scientificName: "Turdus migratorius", color: "#ef4444" },
-//   { key: "2", commonName: "Bald Eagle", scientificName: "Haliaeetus leucocephalus", color: "#3b82f6" },
-//   { key: "3", commonName: "Painted Bunting", scientificName: "Passerina ciris", color: "#8b5cf6" },
-//   { key: "4", commonName: "Northern Cardinal", scientificName: "Cardinalis cardinalis", color: "#f97316" },
-//   { key: "5", commonName: "Blue Jay", scientificName: "Cyanocitta cristata", color: "#06b6d4" },
-//   { key: "6", commonName: "American Goldfinch", scientificName: "Spinus tristis", color: "#eab308" },
-//   { key: "7", commonName: "Red-tailed Hawk", scientificName: "Buteo jamaicensis", color: "#a16207" },
-//   { key: "8", commonName: "Great Blue Heron", scientificName: "Ardea herodias", color: "#64748b" },
-// ];
-
 // --- Color Pool ---
 const COLORS = [
   "#ef4444", "#3b82f6", "#8b5cf6", "#f97316",
@@ -54,6 +42,9 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
     const timer = setTimeout(async () => {
       setIsLoading(true);
       try {
+        const usedColors = new Set(selectedSpecies.map((s) => s.color));
+        const availableColors = COLORS.filter((c) => !usedColors.has(c));
+
         const results = await searchSpecies(query);
         const mapped: Species[] = results
           .filter((r: any) => !selectedSpecies.find((s) => s.key === String(r.key)))
@@ -61,7 +52,7 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
             key: String(r.key),
             commonName: r.commonName || r.name,
             scientificName: r.name,
-            color: COLORS[(selectedSpecies.length + i) % COLORS.length],
+            color: availableColors[i % availableColors.length] ?? COLORS[i % COLORS.length],
           }));
         setSuggestions(mapped);
       } catch (err) {

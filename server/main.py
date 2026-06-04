@@ -169,7 +169,7 @@ async def get_occurrences(species_key: int):
 
 @app.get("/api/species/{species_key}/seasonal")
 async def get_seasonal(species_key: int):
-    cached = cache_get(str(species_key))
+    cached = cache_get(f"{species_key}_seasonal")
     if cached is not None:
         return cached
 

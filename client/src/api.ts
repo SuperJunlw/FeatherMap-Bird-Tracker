@@ -20,3 +20,8 @@ export async function getHotspots(speciesKey: string) {
   const res = await fetch(`${BASE}/api/species/${speciesKey}/hotspots`);
   return res.json();
 }
+
+export async function getSeasonal(speciesKey: string) {
+  const res = await fetch(`${BASE}/api/species/${speciesKey}/seasonal`);
+  return res.json();
+}

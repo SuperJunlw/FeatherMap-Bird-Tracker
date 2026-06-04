@@ -54,6 +54,22 @@ export default function TimeControls({ currentYear, onYearChange }: Props) {
         {isPlaying ? "⏸" : "▶"}
       </button>
 
+      {/* Step Back Button */}
+    <button
+      onClick={() => onYearChange(Math.max(MIN_YEAR, currentYear - STEP))}
+      className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition shrink-0 text-xs"
+    >
+      ◀
+    </button>
+    
+    {/* Step Forward Button */}
+    <button
+      onClick={() => onYearChange(Math.min(MAX_YEAR, currentYear + STEP))}
+      className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition shrink-0 text-xs"
+    >
+      ▶
+    </button>
+
       {/* Slider */}
       <input
         type="range"
