@@ -72,16 +72,16 @@ async def get_species_image(species_key: int):
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.get(f"{GBIF_API}/occurrence/search", params={
             "speciesKey": species_key,
-            "hasCoordinate": False,
             "mediaType": "StillImage",
-            "limit": 10,
+            "limit": 50,
         })
     data = r.json()
     for rec in data.get("results", []):
         for media in rec.get("media", []):
-            if media.get("type") == "StillImage" and media.get("identifier"):
+            url = media.get("identifier")
+            if media.get("type") == "StillImage" and url and url.startswith("https"):
                 return {
-                    "image_url": media["identifier"],
+                    "image_url": url,
                     "license": media.get("license", ""),
                     "publisher": rec.get("institutionCode", ""),
                 }
@@ -99,10 +99,34 @@ async def get_occurrences(species_key: int):
     page_size = 300
 
     async def fetch_year(client, year):
-        records = []
-        offset = 0
+    # First page — also tells us total count
         try:
-            while offset < per_year_limit:
+            r = await client.get(f"{GBIF_API}/occurrence/search", params={
+                "speciesKey": species_key,
+                "hasCoordinate": True,
+                "hasGeospatialIssue": False,
+                "year": year,
+                "limit": page_size,
+                "offset": 0,
+            })
+            first_page = r.json()
+        except (httpx.TimeoutException, httpx.HTTPError):
+            return []
+
+        if not isinstance(first_page, dict):
+            return []
+
+        records = first_page.get("results", [])
+        total = min(first_page.get("count", 0), per_year_limit)
+
+        if total <= page_size:
+            return records
+
+        # Fire all remaining pages concurrently
+        offsets = list(range(page_size, total, page_size))
+
+        async def fetch_page(offset):
+            try:
                 r = await client.get(f"{GBIF_API}/occurrence/search", params={
                     "speciesKey": species_key,
                     "hasCoordinate": True,
@@ -112,18 +136,17 @@ async def get_occurrences(species_key: int):
                     "offset": offset,
                 })
                 data = r.json()
-                if not isinstance(data, dict):
-                    break
-                batch = data.get("results", [])
-                records.extend(batch)
-                if data.get("endOfRecords", True):
-                    break
-                offset += page_size
-        except Exception:
-            pass
-        return records
+                return data.get("results", []) if isinstance(data, dict) else []
+            except (httpx.TimeoutException, httpx.HTTPError):
+                return []
 
-    async with httpx.AsyncClient(timeout=60) as client:
+        page_results = await asyncio.gather(*[fetch_page(o) for o in offsets])
+        for batch in page_results:
+            records.extend(batch)
+
+        return records
+    
+    async with httpx.AsyncClient(timeout=20) as client:
         results = await asyncio.gather(*[fetch_year(client, y) for y in years])
 
     for batch in results:
@@ -141,7 +164,6 @@ async def get_occurrences(species_key: int):
         for k, v in grid.items()
     ]
 
-    # Save to db
     cache_set(str(species_key), result)
     return result
 
