@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from fastapi import Query
 import math
 from collections import defaultdict
 import asyncio
@@ -58,74 +57,67 @@ def root():
 ##Returns species key from scientific name entered
 @app.get("/api/species/search")
 async def search_species(q: str = Query(..., min_length=2)):
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{GBIF_API}/species/suggest", params={"q": q, "limit": 10, "higherTaxonKey": 212}) # 212 is the key for Aves (birds)
-    results = r.json()
-    return [
-        {"key": s["key"], "name": s.get("canonicalName", s.get("scientificName", "")), "commonName": s.get("vernacularName", "")}
-        for s in results
-    ]
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{GBIF_API}/species/suggest", params={"q": q, "limit": 10, "higherTaxonKey": 212}) # 212 is the key for Aves (birds)
+        results = r.json()
+        return [
+            {"key": s["key"], "name": s.get("canonicalName", s.get("scientificName", "")), "commonName": s.get("vernacularName", "")}
+            for s in results
+        ]
+    except httpx.TimeoutException:                
+        raise HTTPException(status_code=504, detail="GBIF is not responding, try again")
+    except httpx.HTTPStatusError:                 
+        raise HTTPException(status_code=502, detail="GBIF returned an error")
+    except Exception:                             
+        raise HTTPException(status_code=500, detail="Something went wrong fetching species data")
 
 ##Returns Image of species searched by species key
 @app.get("/api/species/{species_key}/image")
 async def get_species_image(species_key: int):
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(f"{GBIF_API}/occurrence/search", params={
-            "speciesKey": species_key,
-            "mediaType": "StillImage",
-            "limit": 50,
-        })
-    data = r.json()
-    for rec in data.get("results", []):
-        for media in rec.get("media", []):
-            url = media.get("identifier")
-            if media.get("type") == "StillImage" and url and url.startswith("https"):
-                return {
-                    "image_url": url,
-                    "license": media.get("license", ""),
-                    "publisher": rec.get("institutionCode", ""),
-                }
-    raise HTTPException(status_code=404, detail="No image found for this species")
+    try: 
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{GBIF_API}/occurrence/search", params={
+                "speciesKey": species_key,
+                "mediaType": "StillImage",
+                "limit": 50,
+            })
+        data = r.json()
+        for rec in data.get("results", []):
+            for media in rec.get("media", []):
+                url = media.get("identifier")
+                if media.get("type") == "StillImage" and url and url.startswith("https"):
+                    return {
+                        "image_url": url,
+                        "license": media.get("license", ""),
+                        "publisher": rec.get("institutionCode", ""),
+                    }
+        raise HTTPException(status_code=404, detail="No image found for this species")
+    
+    except HTTPException:                  
+        raise
+
+    except httpx.TimeoutException:                
+        raise HTTPException(status_code=504, detail="GBIF is not responding, try again")
+    except httpx.HTTPStatusError:                 
+        raise HTTPException(status_code=502, detail="GBIF returned an error")
+    except Exception:                             
+        raise HTTPException(status_code=500, detail="Something went wrong fetching species data")
 
 ##Gathers and aggregates data of the species attached input species key
 @app.get("/api/species/{species_key}/occurrences")
 async def get_occurrences(species_key: int):
-    cached = cache_get(str(species_key))
-    if cached is not None:
-        return cached
-    grid = defaultdict(int)
-    years = list(range(1990, 2027, 2))
-    per_year_limit = 3000
-    page_size = 300
+    try:
+        cached = cache_get(str(species_key))
+        if cached is not None:
+            return cached
+        grid = defaultdict(int)
+        years = list(range(1990, 2027, 2))
+        per_year_limit = 3000
+        page_size = 300
 
-    async def fetch_year(client, year):
-    # First page — also tells us total count
-        try:
-            r = await client.get(f"{GBIF_API}/occurrence/search", params={
-                "speciesKey": species_key,
-                "hasCoordinate": True,
-                "hasGeospatialIssue": False,
-                "year": year,
-                "limit": page_size,
-                "offset": 0,
-            })
-            first_page = r.json()
-        except (httpx.TimeoutException, httpx.HTTPError):
-            return []
-
-        if not isinstance(first_page, dict):
-            return []
-
-        records = first_page.get("results", [])
-        total = min(first_page.get("count", 0), per_year_limit)
-
-        if total <= page_size:
-            return records
-
-        # Fire all remaining pages concurrently
-        offsets = list(range(page_size, total, page_size))
-
-        async def fetch_page(offset):
+        async def fetch_year(client, year):
+        # First page — also tells us total count
             try:
                 r = await client.get(f"{GBIF_API}/occurrence/search", params={
                     "speciesKey": species_key,
@@ -133,39 +125,71 @@ async def get_occurrences(species_key: int):
                     "hasGeospatialIssue": False,
                     "year": year,
                     "limit": page_size,
-                    "offset": offset,
+                    "offset": 0,
                 })
-                data = r.json()
-                return data.get("results", []) if isinstance(data, dict) else []
+                first_page = r.json()
             except (httpx.TimeoutException, httpx.HTTPError):
                 return []
 
-        page_results = await asyncio.gather(*[fetch_page(o) for o in offsets])
-        for batch in page_results:
-            records.extend(batch)
+            if not isinstance(first_page, dict):
+                return []
 
-        return records
-    
-    async with httpx.AsyncClient(timeout=20) as client:
-        results = await asyncio.gather(*[fetch_year(client, y) for y in years])
+            records = first_page.get("results", [])
+            total = min(first_page.get("count", 0), per_year_limit)
 
-    for batch in results:
-        for rec in batch:
-            lat = rec.get("decimalLatitude")
-            lon = rec.get("decimalLongitude")
-            year_val = rec.get("year")
-            if lat and lon and year_val:
-                lat_bin = round(math.floor(lat) + 0.5, 1)
-                lon_bin = round(math.floor(lon) + 0.5, 1)
-                grid[(lat_bin, lon_bin, year_val)] += 1
+            if total <= page_size:
+                return records
 
-    result = [
-        {"lat": k[0], "lon": k[1], "year": k[2], "count": v}
-        for k, v in grid.items()
-    ]
+            # Fire all remaining pages concurrently
+            offsets = list(range(page_size, total, page_size))
 
-    cache_set(str(species_key), result)
-    return result
+            async def fetch_page(offset):
+                try:
+                    r = await client.get(f"{GBIF_API}/occurrence/search", params={
+                        "speciesKey": species_key,
+                        "hasCoordinate": True,
+                        "hasGeospatialIssue": False,
+                        "year": year,
+                        "limit": page_size,
+                        "offset": offset,
+                    })
+                    data = r.json()
+                    return data.get("results", []) if isinstance(data, dict) else []
+                except (httpx.TimeoutException, httpx.HTTPError):
+                    return []
+
+            page_results = await asyncio.gather(*[fetch_page(o) for o in offsets])
+            for batch in page_results:
+                records.extend(batch)
+
+            return records
+        
+        async with httpx.AsyncClient(timeout=20) as client:
+            results = await asyncio.gather(*[fetch_year(client, y) for y in years])
+
+        for batch in results:
+            for rec in batch:
+                lat = rec.get("decimalLatitude")
+                lon = rec.get("decimalLongitude")
+                year_val = rec.get("year")
+                if lat and lon and year_val:
+                    lat_bin = round(math.floor(lat) + 0.5, 1)
+                    lon_bin = round(math.floor(lon) + 0.5, 1)
+                    grid[(lat_bin, lon_bin, year_val)] += 1
+
+        result = [
+            {"lat": k[0], "lon": k[1], "year": k[2], "count": v}
+            for k, v in grid.items()
+        ]
+
+        cache_set(str(species_key), result)
+        return result
+    except httpx.TimeoutException:                
+        raise HTTPException(status_code=504, detail="GBIF is not responding, try again")
+    except httpx.HTTPStatusError:                 
+        raise HTTPException(status_code=502, detail="GBIF returned an error")
+    except Exception:                             
+        raise HTTPException(status_code=500, detail="Something went wrong fetching species data")
 
 @app.get("/api/species/{species_key}/seasonal")
 async def get_seasonal(species_key: int):
@@ -227,17 +251,6 @@ async def get_analysis(species_key: int):
         for _ in range(cell["count"]):
             year_lats[cell["year"]].append(cell["lat"])
             year_lons[cell["year"]].append(cell["lon"])
-
-    # centroids = []
-    # for year in sorted(year_lats.keys()):
-    #     lats = year_lats[year]
-    #     lons = year_lons[year]
-    #     centroids.append({
-    #         "year": year,
-    #         "lat": sum(lats) / len(lats),
-    #         "lon": sum(lons) / len(lons),
-    #         "count": len(lats),
-    #     })
 
     # median instead of mean
     centroids = []
