@@ -143,7 +143,7 @@ function App() {
             <div className="absolute inset-0 z-20 bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
               <div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
               <p className="text-sm text-gray-600 font-medium">Loading species data...</p>
-              <p className="text-xs text-gray-400">This may take a few seconds on first load</p>
+              <p className="text-xs text-gray-400">This may take a while on first load</p>
             </div>
           )}
 
