@@ -14,6 +14,8 @@ The backend is a FastAPI server that proxies GBIF API calls and caches results i
 - Data Source: [GBIF API](https://www.gbif.org/developer/summary) (Global Biodiversity Information Facility)
 
 ## Setup
+Clone the project locally
+
 Prerequisites:
 - Python 3.10+
 - Node.js 18+
