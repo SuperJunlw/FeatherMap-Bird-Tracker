@@ -7,13 +7,12 @@ import asyncio
 from pathlib import Path
 import json
 import statistics
+import sqlite3
 
+##Setup for GBIF API and repeat queries database
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 GBIF_API = "https://api.gbif.org/v1"
-
-import sqlite3
-
 DB_PATH = Path("cache.db")
 
 def _init_db():
@@ -24,6 +23,7 @@ def _init_db():
 
 _init_db()
 
+##returns values from database matching input species key
 def cache_get(key: str):
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
@@ -31,6 +31,7 @@ def cache_get(key: str):
         ).fetchone()
     return json.loads(row[0]) if row else None
 
+##stores data into SQLite database
 def cache_set(key: str, value):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -39,9 +40,8 @@ def cache_set(key: str, value):
         )
         conn.commit()
 
-
+##Create FastAPI instance
 app = FastAPI(title="FeatherMap API")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -54,7 +54,8 @@ def root():
     return {"message": "FeatherMap API is running"}
 
 ## Endpoints
-##Returns species key from scientific name entered
+##Queries GBIF species suggest API filtered to Aves (birds), returns up to 10 matches
+##each with their species key, scientific name, and common name if available
 @app.get("/api/species/search")
 async def search_species(q: str = Query(..., min_length=2)):
     try:
@@ -65,6 +66,8 @@ async def search_species(q: str = Query(..., min_length=2)):
             {"key": s["key"], "name": s.get("canonicalName", s.get("scientificName", "")), "commonName": s.get("vernacularName", "")}
             for s in results
         ]
+    
+    ##Error handling for search
     except httpx.TimeoutException:                
         raise HTTPException(status_code=504, detail="GBIF is not responding, try again")
     except httpx.HTTPStatusError:                 
@@ -72,7 +75,10 @@ async def search_species(q: str = Query(..., min_length=2)):
     except Exception:                             
         raise HTTPException(status_code=500, detail="Something went wrong fetching species data")
 
-##Returns Image of species searched by species key
+
+
+##Queries GBIF occurrence search by species key for still images, returns the first
+##valid https image found with its license and publisher
 @app.get("/api/species/{species_key}/image")
 async def get_species_image(species_key: int):
     try: 
@@ -92,11 +98,11 @@ async def get_species_image(species_key: int):
                         "license": media.get("license", ""),
                         "publisher": rec.get("institutionCode", ""),
                     }
+ ##Error Handling               
         raise HTTPException(status_code=404, detail="No image found for this species")
     
     except HTTPException:                  
         raise
-
     except httpx.TimeoutException:                
         raise HTTPException(status_code=504, detail="GBIF is not responding, try again")
     except httpx.HTTPStatusError:                 
@@ -104,7 +110,8 @@ async def get_species_image(species_key: int):
     except Exception:                             
         raise HTTPException(status_code=500, detail="Something went wrong fetching species data")
 
-##Gathers and aggregates data of the species attached input species key
+##Fetches occurrence records from GBIF for a species key across years 1990-2026,
+##aggregates them into a lat/lon/year grid, and caches the result in SQLite
 @app.get("/api/species/{species_key}/occurrences")
 async def get_occurrences(species_key: int):
     try:
@@ -112,12 +119,12 @@ async def get_occurrences(species_key: int):
         if cached is not None:
             return cached
         grid = defaultdict(int)
-        years = list(range(1990, 2027, 2))
-        per_year_limit = 3000
+        years = list(range(1990, 2027, 2)) #returns data for every other year for faster load
+        per_year_limit = 3000 #adjustable but inccreasing slows down load time significantly (GBIF hard limit to 100000)
         page_size = 300
 
         async def fetch_year(client, year):
-        # First page — also tells us total count
+        # First page, also tells us total count
             try:
                 r = await client.get(f"{GBIF_API}/occurrence/search", params={
                     "speciesKey": species_key,
@@ -184,6 +191,8 @@ async def get_occurrences(species_key: int):
 
         cache_set(str(species_key), result)
         return result
+    
+    ##Error Handling fo occurence fetching
     except httpx.TimeoutException:                
         raise HTTPException(status_code=504, detail="GBIF is not responding, try again")
     except httpx.HTTPStatusError:                 
@@ -191,6 +200,8 @@ async def get_occurrences(species_key: int):
     except Exception:                             
         raise HTTPException(status_code=500, detail="Something went wrong fetching species data")
 
+##Fetches monthly observation counts from GBIF in 5-year windows from 1990-2026
+##using facet queries, returns a dict of window labels to 12-month count arrays
 @app.get("/api/species/{species_key}/seasonal")
 async def get_seasonal(species_key: int):
     cached = cache_get(f"{species_key}_seasonal")
@@ -233,7 +244,8 @@ async def get_seasonal(species_key: int):
     cache_set(f"{species_key}_seasonal", seasonal_result)
     return seasonal_result
 
-##Analysis section centroid implemented
+##Groups occurrence data by year, computes median lat/lon centroids per year,
+##then runs linear regression on latitude over time to detect northward/southward range shifts
 @app.get("/api/species/{species_key}/analysis")
 async def get_analysis(species_key: int):
     try:
@@ -290,6 +302,9 @@ async def get_analysis(species_key: int):
         }
     }
 
+##Compares early (1990-2010) vs recent (2010-2026) effort normalized occurrence shares
+##per grid cell, classifies each as emerging, declining, or persistent, and returns
+##a list of hotspots with a summary count of each type
 @app.get("/api/species/{species_key}/hotspots")
 async def get_hotspots(species_key: int):
     data = await get_occurrences(species_key)
