@@ -13,3 +13,4 @@ __pycache__
 .venvcache.db
 cache/
 .DS_Store
+node_modules/
