@@ -5,17 +5,20 @@ import SidePanel from "./components/SidePanel";
 import TimeControls from "./components/TimeControls";
 import { getOccurrences, getAnalysis, getHotspots } from "./api";
 
+// Helper to convert hex color string to RGB tuple
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+// Types for analysis and hotspot data returned by API
 export interface SpeciesAnalysis {
   speciesKey: string;
   color: string;
   centroids: { year: number; lat: number; lon: number; count: number }[];
 }
 
+// Type for hotspot data returned by API
 export interface HotspotData {
   lat: number;
   lon: number;
@@ -26,19 +29,20 @@ export interface HotspotData {
 }
 
 function App() {
-  const [selectedSpecies, setSelectedSpecies] = useState<Species[]>([]);
-  const [sightings, setSightings] = useState<BirdSighting[]>([]);
-  const [analyses, setAnalyses] = useState<SpeciesAnalysis[]>([]);
-  const [hotspots, setHotspots] = useState<HotspotData[]>([]);
-  const [activeSpeciesKey, setActiveSpeciesKey] = useState<string | null>(null);
-  const [currentYear, setCurrentYear] = useState(1990);
-  const [mapMode, setMapMode] = useState<"dot" | "heatmap">("dot");
-  const [loading, setLoading] = useState(false);
-  const [resetView, setResetView] = useState(0);
-  const [dataTrigger, setDataTrigger] = useState(0);
-  const [readyKeys, setReadyKeys] = useState<Set<string>>(new Set());
+  const [selectedSpecies, setSelectedSpecies] = useState<Species[]>([]); // list of currently selected species
+  const [sightings, setSightings] = useState<BirdSighting[]>([]); // list of all bird sightings
+  const [analyses, setAnalyses] = useState<SpeciesAnalysis[]>([]); // list of analysis data for each species
+  const [hotspots, setHotspots] = useState<HotspotData[]>([]); // list of hotspot data for each species
+  const [activeSpeciesKey, setActiveSpeciesKey] = useState<string | null>(null); // which species is currently selected in side panel for showing hotspots
+  const [currentYear, setCurrentYear] = useState(1990); // current year for time slider, default to 1990
+  const [mapMode, setMapMode] = useState<"dot" | "heatmap">("dot"); // whether map is in dot mode or heatmap mode
+  const [loading, setLoading] = useState(false); // whether we are currently loading data for a newly added species
+  const [resetView, setResetView] = useState(0); // counter to trigger map view reset when changing from 0 to 1 on first species add
+  const [dataTrigger, setDataTrigger] = useState(0); // counter to trigger map data update when new data is loaded for a species
+  const [readyKeys, setReadyKeys] = useState<Set<string>>(new Set()); // set of species keys that are ready to be displayed on the map
   
 
+  // Handler for when a species is added from the search bar
   const handleAdd = async (s: Species) => {
     setSelectedSpecies((prev) => [...prev, s]);
     if (selectedSpecies.length >= 1) {
@@ -47,12 +51,14 @@ function App() {
     }
     setLoading(true);
     try {
+      // Fetch all data for the new species in parallel
       const [occData, analysisData, hotspotData] = await Promise.all([
         getOccurrences(s.key).catch(() => []),
         getAnalysis(s.key).catch(() => ({ centroids: [], trend: {} })),
         getHotspots(s.key).catch(() => ({ hotspots: [] })),
       ]);
 
+      // Transform occurrence data into BirdSighting format and add to sightings state
       const newSightings: BirdSighting[] = occData.map((d: any) => ({
         latitude: d.lat,
         longitude: d.lon,
@@ -83,6 +89,7 @@ function App() {
     }
   };
 
+  // Handler for when a species is removed from the search bar
   const handleRemove = (s: Species) => {
     setSelectedSpecies((prev) => prev.filter((x) => x.key !== s.key));
     setSightings((prev) => prev.filter((x) => x.speciesKey !== s.key));

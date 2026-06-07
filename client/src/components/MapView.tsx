@@ -10,6 +10,7 @@ import type { SpeciesAnalysis, HotspotData } from "../App";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
+// Types
 export interface BirdSighting {
   latitude: number;
   longitude: number;
@@ -49,17 +50,22 @@ export default function MapView({
   sightings, analyses, hotspots, currentYear, mapMode, onToggleMode,
   selectedSpecies, resetView, activeSpeciesKey, dataTrigger
 }: Props) {
-  const [viewState, setViewState] = useState(INITIAL_VIEW);
-  const [showCentroids, setShowCentroids] = useState(true);
-  const [showHotspots, setShowHotspots] = useState(false);
+  const [viewState, setViewState] = useState(INITIAL_VIEW); // For map position and zoom
+  const [showCentroids, setShowCentroids] = useState(true); // Toggle for centroid trails and points
+  const [showHotspots, setShowHotspots] = useState(false);  // Toggle for hotspot points and heatmap
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  
+  // Track map load state to avoid rendering D3 elements too early
   const [mapLoaded, setMapLoaded] = useState(false);
 
-  const svgRef = useRef<SVGSVGElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null); // For D3 overlay
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const animateRef = useRef(false);
+  const mapRef = useRef<any>(null); // Map instance: from lat/lon to pixel projection
+  
+  // true when year/analyses change, false for pan/zoom and instant redraws
+  const animateRef = useRef(false); 
 
+  // Update container size on mount and when resized
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver((entries) => {
@@ -70,12 +76,15 @@ export default function MapView({
     return () => ro.disconnect();
   }, []);
 
+  // Reset hotspots when view resets
   useEffect(() => { setShowHotspots(false); }, [resetView]);
 
+  // Disable centroids when in heatmap or hotspot mode
   useEffect(() => {
     if (mapMode === "heatmap" || showHotspots) setShowCentroids(false);
   }, [mapMode, showHotspots]);
 
+  // Fall back to nearest available year if no sightings exist for the exact currentYear 
   const filteredSightings = useMemo(() => {
     let yearData = sightings.filter((s) => s.year === currentYear);
     if (yearData.length === 0) {
@@ -88,6 +97,7 @@ export default function MapView({
     return yearData;
   }, [sightings, currentYear, dataTrigger]);
 
+  // Trigger centroid animation on year or analyses change
   useEffect(() => {
     animateRef.current = true;
   }, [analyses, currentYear]);
@@ -96,6 +106,7 @@ export default function MapView({
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    // Instant redraw for pan/zoom, delayed 50ms for year changes to let mapbox finish updating
     const redraw = () => {
       const svg = d3.select(svgRef.current);
       svg.selectAll("*").remove();
@@ -108,6 +119,7 @@ export default function MapView({
       const shouldAnimate = animateRef.current;
       animateRef.current = false;
 
+      // Project lat/lon to screen coordinates
       const project = (lon: number, lat: number): [number, number] => {
         const point = map.project([lon, lat]);
         return [point.x, point.y];
@@ -127,9 +139,11 @@ export default function MapView({
 
       const tooltipContent = tooltip.append("g").attr("transform", "translate(12, 12)");
 
+      // Draw centroid trails and points
       analyses.forEach((a) => {
         const centroids = a.centroids.filter((c) => c.year <= currentYear);
 
+        // Only animate if there are 2+ points to show the trail forming
         if (centroids.length >= 2) {
           const points = centroids.map((c) => project(c.lon, c.lat));
 
@@ -170,6 +184,7 @@ export default function MapView({
         const [x, y] = project(closest.lon, closest.lat);
         const gridCells = filteredSightings.filter((s) => s.speciesKey === a.speciesKey).length;
 
+        // Draw invisible larger circle for easier hover
         const g = svg.insert("g", ".centroid-tooltip")
           .attr("transform", `translate(${x},${y})`)
           .style("opacity", 0)
@@ -193,6 +208,7 @@ export default function MapView({
           .attr("fill", "transparent")
           .attr("stroke", "none");
 
+        // Hover interactions
         g.on("mouseenter", function(event) {
             d3.select(this).select("circle:nth-child(2)")
               .transition().duration(150).attr("r", 13);
@@ -247,15 +263,16 @@ export default function MapView({
             tooltip.transition().duration(150).style("opacity", 0);
           });
 
+        // Fade in the group after adding interactions to prevent flicker
         g.transition()
           .delay(shouldAnimate && centroids.length >= 2 ? 850 : 0)
           .duration(shouldAnimate ? 250 : 0)
           .ease(d3.easeBackOut.overshoot(1.5))
           .style("opacity", 1);
-      }); // ← closes analyses.forEach
-    }; // ← closes redraw function
+      }); 
+    }; 
 
-    // Outside redraw — decides whether to delay or not
+    // Outside redraw, decides whether to delay or not
     if (animateRef.current) {
       timer = setTimeout(redraw, 50);
     } else {
@@ -266,8 +283,7 @@ export default function MapView({
 
   }, [analyses, currentYear, viewState, showCentroids, filteredSightings, containerSize, mapLoaded]);
 
-
-
+  // deck.gl ScatterplotLayer, individual sighting dots colored per species
   const scatterLayer = useMemo(() => new ScatterplotLayer<BirdSighting>({
     id: "scatter-layer",
     data: filteredSightings,
@@ -280,10 +296,12 @@ export default function MapView({
     visible: mapMode === "dot" && !showHotspots,
   }), [filteredSightings, mapMode, showHotspots]);
 
+  // deck.gl HeatmapLayer, density view for the active side panel species only
   const heatmapSightings = useMemo(() => {
     return filteredSightings.filter((s) => s.speciesKey === activeSpeciesKey);
   }, [filteredSightings, activeSpeciesKey]);
 
+  // deck.gl HeatmapLayer, density view for the active side panel species only
   const heatmapLayer = useMemo(() => new HeatmapLayer<BirdSighting>({
     id: "heatmap-layer",
     data: heatmapSightings,
@@ -295,6 +313,7 @@ export default function MapView({
     visible: mapMode === "heatmap" && !showHotspots,
   }), [heatmapSightings, mapMode, showHotspots]);
 
+  // deck.gl ScatterplotLayer for hotspots, colored by type and only shown when toggled on
   const hotspotLayer = useMemo(() => new ScatterplotLayer<HotspotData>({
     id: "hotspot-layer",
     data: hotspots,
