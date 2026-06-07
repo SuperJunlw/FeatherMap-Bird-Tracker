@@ -406,7 +406,7 @@ export default function MapView({
           Hotspots
         </button>
 
-        {selectedSpecies.length > 1 && (
+        {selectedSpecies.length > 0 && (
           <p className="text-xs text-gray-500 max-w-32 leading-snug drop-shadow-sm">
             Heatmap & Hotspots show the side panel species only
           </p>
