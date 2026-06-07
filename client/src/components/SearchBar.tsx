@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { searchSpecies } from "../api";
 
-// --- Types ---
+
 export interface Species {
   key: string;
   commonName: string;
@@ -9,13 +9,12 @@ export interface Species {
   color: string;
 }
 
-// --- Color Pool ---
+// Color pool
 const COLORS = [
   "#ef4444", "#3b82f6", "#8b5cf6", "#f97316",
   "#06b6d4", "#eab308", "#a16207", "#64748b"
 ];
 
-// --- Props ---
 interface Props {
   selectedSpecies: Species[];
   onAdd: (s: Species) => void;
@@ -25,14 +24,16 @@ interface Props {
 const MAX_SPECIES = 5;
 
 export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
-  const [query, setQuery] = useState("");
-  const [isFocused, setIsFocused] = useState(false);
-  const [suggestions, setSuggestions] = useState<Species[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
-  const [hoverImage, setHoverImage] = useState<string | null>(null);
-  const [hoverLoading, setHoverLoading] = useState(false);
+  const [query, setQuery] = useState(""); // current input value
+  const [isFocused, setIsFocused] = useState(false); // whether input is focused to show suggestions
+  const [suggestions, setSuggestions] = useState<Species[]>([]); // current list of search suggestions
+  const [isLoading, setIsLoading] = useState(false); // whether search API call is in progress
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null); // which suggestion is currently hovered for image tooltip
+  const [hoverImage, setHoverImage] = useState<string | null>(null); // image URL for hovered suggestion
+  const [hoverLoading, setHoverLoading] = useState(false); // whether image fetch for hovered suggestion is in progress
 
+  
+  // fetch search suggestions when query changes with debounce
   useEffect(() => {
     if (query.length < 2) {
       setSuggestions([]);
@@ -66,6 +67,7 @@ export default function SearchBar({ selectedSpecies, onAdd, onRemove }: Props) {
     return () => clearTimeout(timer);
   }, [query, selectedSpecies]);
 
+  // fetch image for hovered suggestion
   const handleHover = async (key: string) => {
     if (hoveredKey === key) return;
     setHoveredKey(key);

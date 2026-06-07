@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import type { Species } from "./SearchBar";
 import type { BirdSighting } from "./MapView";
 import { getAnalysis, getHotspots, getSeasonal } from "../api";
+import * as d3 from "d3";
 
 const BASE = "http://localhost:8000";
 
+// Helper function to reverse geocode lat/lon to a human-readable location using Nominatim API
 async function reverseGeocode(lat: number, lon: number): Promise<string> {
   try {
     const res = await fetch(
@@ -44,21 +46,41 @@ interface SpeciesImage {
 }
 
 export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChange, readyKeys }: Props) {
-  const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [image, setImage] = useState<SpeciesImage | null>(null);
-  const [imageLoading, setImageLoading] = useState(false);
-  const [analysis, setAnalysis] = useState<any>(null);
-  const [hotspots, setHotspots] = useState<any>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [showObservations, setShowObservations] = useState(false);
-  const [showCentroid, setShowCentroid] = useState(false);
-  const [showHotspotSummary, setShowHotspotSummary] = useState(false);
-  const [locationLabels, setLocationLabels] = useState<Record<string, string>>({});
-  const [seasonal, setSeasonal] = useState<any>(null);
-  const [showSeasonal, setShowSeasonal] = useState(false);
-  const [windowA, setWindowA] = useState<string | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null); // currently selected species key for showing details in the panel
+  const [image, setImage] = useState<SpeciesImage | null>(null); // image data for the active species, fetched from the backend
+  const [imageLoading, setImageLoading] = useState(false); // loading state for the species image to show a spinner while fetching
+  const [analysis, setAnalysis] = useState<any>(null); // analysis data 
+  const [hotspots, setHotspots] = useState<any>(null); // hotspot data 
+  const [analysisLoading, setAnalysisLoading] = useState(false); // loading state for the analysis data to show a spinner while fetching
+  const [showObservations, setShowObservations] = useState(false); // toggle for showing the observations over time chart
+  const [showCentroid, setShowCentroid] = useState(false); // toggle for showing the centroid movement over time chart
+  const [showHotspotSummary, setShowHotspotSummary] = useState(false); // toggle for showing the hotspot summary section
+  const [locationLabels, setLocationLabels] = useState<Record<string, string>>({}); // cache for reverse geocoded location labels keyed by "lat,lon"
+  const [seasonal, setSeasonal] = useState<any>(null); // seasonal pattern data 
+  const [showSeasonal, setShowSeasonal] = useState(false); // toggle for showing the seasonal pattern chart
+  const [windowA, setWindowA] = useState<string | null>(null); 
   const [windowB, setWindowB] = useState<string | null>(null);
+  const observationsChartRef = useRef<SVGSVGElement>(null); // ref for the D3 observations chart SVG element
+  const centroidChartRef = useRef<SVGSVGElement>(null); // ref for the D3 centroid chart SVG element
+  const seasonalChartRef = useRef<SVGSVGElement>(null); // ref for the D3 seasonal pattern chart SVG element
 
+  const activeSpecies = selectedSpecies.find((s) => s.key === activeKey);
+
+  // Prepare data for the observations over time chart by counting sightings per year
+  const chartData = (() => {
+    if (!activeKey) return [];
+    const yearCounts: Record<number, number> = {};
+    sightings
+      .filter((s) => s.speciesKey === activeKey)
+      .forEach((s) => {
+        yearCounts[s.year] = (yearCounts[s.year] || 0) + 1;
+      });
+    return Object.entries(yearCounts)
+      .map(([year, count]) => ({ year: Number(year), count }))
+      .sort((a, b) => a.year - b.year);
+  })();
+
+  // Prepare data for the heatmap layer 
   useEffect(() => {
     if (selectedSpecies.length > 0) {
       setActiveKey(selectedSpecies[0].key);
@@ -68,10 +90,12 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
     }
   }, [selectedSpecies]);
 
+  // Active key change
   useEffect(() => {
     onActiveKeyChange(activeKey);
   }, [activeKey]);
 
+  // Fetch species image when activeKey changes and is in readyKeys
   useEffect(() => {
     if (!activeKey || !readyKeys.has(activeKey)) return;
     setImageLoading(true);
@@ -83,6 +107,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
       .finally(() => setImageLoading(false));
   }, [activeKey, readyKeys]);
 
+  // Fetch analysis data when activeKey changes and is in readyKeys
   useEffect(() => {
     if (!activeKey || !readyKeys.has(activeKey)) return;
     setAnalysisLoading(true);
@@ -101,6 +126,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
       .finally(() => setAnalysisLoading(false));
   }, [activeKey, readyKeys]);
 
+  // Reverse geocode hotspot locations when hotspots data is loaded
   useEffect(() => {
     if (!hotspots?.hotspots) return;
     const top5 = [...hotspots.hotspots]
@@ -115,20 +141,323 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
     });
   }, [hotspots]);
 
-  const activeSpecies = selectedSpecies.find((s) => s.key === activeKey);
+  // D3 observations chart setup
+  useEffect(() => {
+    if (!observationsChartRef.current || chartData.length === 0) return;
 
-  const chartData = (() => {
-    if (!activeKey) return [];
-    const yearCounts: Record<number, number> = {};
-    sightings
-      .filter((s) => s.speciesKey === activeKey)
-      .forEach((s) => {
-        yearCounts[s.year] = (yearCounts[s.year] || 0) + 1;
+    const svg = d3.select(observationsChartRef.current);
+    svg.selectAll("*").remove();
+
+    const width = observationsChartRef.current.clientWidth || 280;
+    const height = 140;
+    const margin = { top: 8, right: 8, bottom: 24, left: 36 };
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    const x = d3.scaleLinear()
+      .domain(d3.extent(chartData, d => d.year) as [number, number])
+      .range([0, innerW]);
+
+    const y = d3.scaleLinear()
+      .domain([0, d3.max(chartData, d => d.count) as number])
+      .nice()
+      .range([innerH, 0]);
+
+    // Axes
+    g.append("g")
+      .attr("transform", `translate(0,${innerH})`)
+      .call(d3.axisBottom(x).ticks(5).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line").remove())
+      .call(g => g.selectAll("text").attr("font-size", "10px").attr("fill", "#9ca3af"));
+
+    g.append("g")
+      .call(d3.axisLeft(y).ticks(4))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line").remove())
+      .call(g => g.selectAll("text").attr("font-size", "10px").attr("fill", "#9ca3af"));
+
+    // Line
+    const line = d3.line<{year: number; count: number}>()
+      .x(d => x(d.year))
+      .y(d => y(d.count))
+      .curve(d3.curveCatmullRom);
+
+    g.append("path")
+      .datum(chartData)
+      .attr("fill", "none")
+      .attr("stroke", activeSpecies?.color ?? "#22c55e")
+      .attr("stroke-width", 2)
+      .attr("d", line);
+
+    // Tooltip line and dot
+    const focus = g.append("g").style("display", "none");
+    focus.append("line")
+      .attr("stroke", "#e5e7eb")
+      .attr("stroke-width", 1)
+      .attr("y1", 0).attr("y2", innerH);
+    focus.append("circle")
+      .attr("r", 4)
+      .attr("fill", activeSpecies?.color ?? "#22c55e")
+      .attr("stroke", "white")
+      .attr("stroke-width", 2);
+
+    const tooltipEl = g.append("g").style("display", "none");
+    const tooltipRect = tooltipEl.append("rect")
+      .attr("rx", 4).attr("ry", 4)
+      .attr("fill", "white")
+      .attr("stroke", "#e5e7eb")
+      .style("filter", "drop-shadow(0 1px 4px rgba(0,0,0,0.1))");
+    const tooltipText = tooltipEl.append("text")
+      .attr("font-size", "11px")
+      .attr("fill", "#374151");
+
+    g.append("rect")
+      .attr("width", innerW).attr("height", innerH)
+      .attr("fill", "transparent")
+      .on("mousemove", function(event) {
+        const [mx] = d3.pointer(event);
+        const year = Math.round(x.invert(mx));
+        const d = chartData.find(d => d.year === year) ?? chartData.reduce((a, b) =>
+          Math.abs(b.year - year) < Math.abs(a.year - year) ? b : a);
+        focus.style("display", null);
+        focus.select("line").attr("x1", x(d.year)).attr("x2", x(d.year));
+        focus.select("circle").attr("cx", x(d.year)).attr("cy", y(d.count));
+
+        tooltipEl.style("display", null);
+        tooltipText.text(`${d.year}: ${d.count} sightings`);
+        const bbox = (tooltipText.node() as SVGTextElement).getBBox();
+        tooltipRect.attr("x", bbox.x - 6).attr("y", bbox.y - 4)
+          .attr("width", bbox.width + 12).attr("height", bbox.height + 8);
+        const tx = Math.min(x(d.year) + 8, innerW - bbox.width - 16);
+        const ty = Math.max(y(d.count) - 28, 0);
+        tooltipEl.attr("transform", `translate(${tx},${ty})`);
+      })
+      .on("mouseleave", () => {
+        focus.style("display", "none");
+        tooltipEl.style("display", "none");
       });
-    return Object.entries(yearCounts)
-      .map(([year, count]) => ({ year: Number(year), count }))
-      .sort((a, b) => a.year - b.year);
-  })();
+
+  }, [chartData, activeSpecies?.color, showObservations]);
+
+  // D3 centroid chart setup
+  useEffect(() => {
+    if (!centroidChartRef.current || !analysis?.centroids?.length) return;
+
+    const svg = d3.select(centroidChartRef.current);
+    svg.selectAll("*").remove();
+
+    const data = analysis.centroids;
+    const width = centroidChartRef.current.clientWidth || 280;
+    const height = 140;
+    const margin = { top: 8, right: 8, bottom: 24, left: 36 };
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    // Scales
+    const x = d3.scaleLinear()
+      .domain(d3.extent(data, (d: any) => d.year) as [number, number])
+      .range([0, innerW]);
+
+    const y = d3.scaleLinear()
+      .domain(d3.extent(data, (d: any) => d.lat) as [number, number])
+      .nice()
+      .range([innerH, 0]);
+
+    g.append("g")
+      .attr("transform", `translate(0,${innerH})`)
+      .call(d3.axisBottom(x).ticks(5).tickFormat(d3.format("d")))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line").remove())
+      .call(g => g.selectAll("text").attr("font-size", "10px").attr("fill", "#9ca3af"));
+
+    g.append("g")
+      .call(d3.axisLeft(y).ticks(4).tickFormat(d => `${d}°`))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line").remove())
+      .call(g => g.selectAll("text").attr("font-size", "10px").attr("fill", "#9ca3af"));
+
+    // Line
+    const line = d3.line<any>()
+      .x(d => x(d.year))
+      .y(d => y(d.lat))
+      .curve(d3.curveCatmullRom);
+
+    g.append("path")
+      .datum(data)
+      .attr("fill", "none")
+      .attr("stroke", activeSpecies?.color ?? "#22c55e")
+      .attr("stroke-width", 2)
+      .attr("d", line);
+
+    // Centroid points
+    const focus = g.append("g").style("display", "none");
+    focus.append("line")
+      .attr("stroke", "#e5e7eb").attr("stroke-width", 1)
+      .attr("y1", 0).attr("y2", innerH);
+    focus.append("circle")
+      .attr("r", 4)
+      .attr("fill", activeSpecies?.color ?? "#22c55e")
+      .attr("stroke", "white").attr("stroke-width", 2);
+
+    // Tooltip setup
+    const tooltipEl = g.append("g").style("display", "none");
+    const tooltipRect = tooltipEl.append("rect")
+      .attr("rx", 4).attr("ry", 4)
+      .attr("fill", "white").attr("stroke", "#e5e7eb")
+      .style("filter", "drop-shadow(0 1px 4px rgba(0,0,0,0.1))");
+    const tooltipText = tooltipEl.append("text")
+      .attr("font-size", "11px").attr("fill", "#374151");
+
+    g.append("rect")
+      .attr("width", innerW).attr("height", innerH)
+      .attr("fill", "transparent")
+      .on("mousemove", function(event) {
+        const [mx] = d3.pointer(event);
+        const year = Math.round(x.invert(mx));
+        const d = data.reduce((a: any, b: any) =>
+          Math.abs(b.year - year) < Math.abs(a.year - year) ? b : a);
+        focus.style("display", null);
+        focus.select("line").attr("x1", x(d.year)).attr("x2", x(d.year));
+        focus.select("circle").attr("cx", x(d.year)).attr("cy", y(d.lat));
+
+        tooltipEl.style("display", null);
+        tooltipText.text(`${d.year}: ${Number(d.lat).toFixed(2)}°`);
+        const bbox = (tooltipText.node() as SVGTextElement).getBBox();
+        tooltipRect.attr("x", bbox.x - 6).attr("y", bbox.y - 4)
+          .attr("width", bbox.width + 12).attr("height", bbox.height + 8);
+        const tx = Math.min(x(d.year) + 8, innerW - bbox.width - 16);
+        const ty = Math.max(y(d.lat) - 28, 0);
+        tooltipEl.attr("transform", `translate(${tx},${ty})`);
+      })
+      .on("mouseleave", () => {
+        focus.style("display", "none");
+        tooltipEl.style("display", "none");
+      });
+
+  }, [analysis, activeSpecies?.color, showCentroid]);
+
+  // D3 seasonal pattern chart setup
+  useEffect(() => {
+    if (!seasonalChartRef.current || !seasonal) return;
+
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const windows = Object.keys(seasonal).filter(w => w !== "2025-2026");
+    const a = windowA ?? windows[0];
+    const b = windowB ?? windows[windows.length - 1];
+    const dataA = (seasonal[a] as number[]).map((v, i) => ({ month: MONTHS[i], value: v }));
+    const dataB = (seasonal[b] as number[]).map((v, i) => ({ month: MONTHS[i], value: v }));
+
+    const svg = d3.select(seasonalChartRef.current);
+    svg.selectAll("*").remove();
+
+    const width = seasonalChartRef.current.clientWidth || 280;
+    const height = 140;
+    const margin = { top: 8, right: 8, bottom: 24, left: 60 };
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    // Scales
+    const x = d3.scalePoint()
+      .domain(MONTHS)
+      .range([0, innerW]);
+
+    const maxVal = d3.max([...dataA, ...dataB], d => d.value) as number;
+    const y = d3.scaleLinear().domain([0, maxVal]).nice().range([innerH, 0]);
+
+    g.append("g")
+      .attr("transform", `translate(0,${innerH})`)
+      .call(d3.axisBottom(x).tickValues(["Jan","Mar","May","Jul","Sep","Nov"]))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line").remove())
+      .call(g => g.selectAll("text").attr("font-size", "9px").attr("fill", "#9ca3af"));
+
+    g.append("g")
+      .call(d3.axisLeft(y).ticks(4))
+      .call(g => g.select(".domain").remove())
+      .call(g => g.selectAll(".tick line").remove())
+      .call(g => g.selectAll("text").attr("font-size", "10px").attr("fill", "#9ca3af"));
+
+    // Lines
+    const line = d3.line<{month: string; value: number}>()
+      .x(d => x(d.month) as number)
+      .y(d => y(d.value))
+      .curve(d3.curveCatmullRom);
+
+    const drawLine = (data: {month: string; value: number}[], color: string) => {
+      const path = g.append("path").datum(data)
+        .attr("fill", "none").attr("stroke", color)
+        .attr("stroke-width", 2).attr("d", line);
+      const len = (path.node() as SVGPathElement).getTotalLength();
+      path
+        .attr("stroke-dasharray", `${len} ${len}`)
+        .attr("stroke-dashoffset", len)
+        .transition().duration(700).ease(d3.easeCubicInOut)
+        .attr("stroke-dashoffset", 0);
+    };
+
+    drawLine(dataA, "#94a3b8");
+    drawLine(dataB, activeSpecies?.color ?? "#22c55e");
+
+    // Legend
+    const focus = g.append("g").style("display", "none");
+    
+    focus.append("line")
+      .attr("stroke", "#e5e7eb").attr("stroke-width", 1)
+      .attr("y1", 0).attr("y2", innerH);
+    focus.append("circle").attr("class", "dot-a").attr("r", 4)
+      .attr("fill", "#94a3b8").attr("stroke", "white").attr("stroke-width", 2);
+    focus.append("circle").attr("class", "dot-b").attr("r", 4)
+      .attr("fill", activeSpecies?.color ?? "#22c55e").attr("stroke", "white").attr("stroke-width", 2);
+
+    // Tooltip setup
+    const tooltipEl = g.append("g").style("display", "none");
+    const tooltipRect = tooltipEl.append("rect")
+      .attr("rx", 4).attr("ry", 4).attr("fill", "white").attr("stroke", "#e5e7eb")
+      .style("filter", "drop-shadow(0 1px 4px rgba(0,0,0,0.1))");
+    const tooltipTextA = tooltipEl.append("text").attr("font-size", "11px").attr("fill", "#94a3b8");
+    const tooltipTextB = tooltipEl.append("text").attr("font-size", "11px").attr("fill", activeSpecies?.color ?? "#22c55e");
+
+    g.append("rect")
+      .attr("width", innerW).attr("height", innerH).attr("fill", "transparent")
+      .on("mousemove", function(event) {
+        const [mx] = d3.pointer(event);
+        const allMonths = MONTHS.map(m => ({ m, px: x(m) as number }));
+        const closest = allMonths.reduce((a, b) => Math.abs(b.px - mx) < Math.abs(a.px - mx) ? b : a);
+        const idx = MONTHS.indexOf(closest.m);
+        focus.style("display", null);
+        focus.select("line").attr("x1", closest.px).attr("x2", closest.px);
+        focus.select(".dot-a").attr("cx", closest.px).attr("cy", y(dataA[idx].value));
+        focus.select(".dot-b").attr("cx", closest.px).attr("cy", y(dataB[idx].value));
+
+        tooltipEl.style("display", null);
+        tooltipTextA.text(`${closest.m} ${a}: ${dataA[idx].value.toLocaleString()}`).attr("x", 6).attr("y", 14);
+        tooltipTextB.text(`${closest.m} ${b}: ${dataB[idx].value.toLocaleString()}`).attr("x", 6).attr("y", 28);
+
+        const bboxA = (tooltipTextA.node() as SVGTextElement).getBBox();
+        const bboxB = (tooltipTextB.node() as SVGTextElement).getBBox();
+        const w = Math.max(bboxA.width, bboxB.width) + 12;
+        const h = 36;
+        tooltipRect.attr("x", 0).attr("y", 0).attr("width", w).attr("height", h);
+
+        const tx = Math.min(closest.px + 8, innerW - w - 4);
+        // If near top, show below the dots instead of above
+        const minY = Math.min(y(dataA[idx].value), y(dataB[idx].value));
+        const ty = minY - h - 8 < 0 ? minY + 12 : minY - h - 8;
+        tooltipEl.attr("transform", `translate(${tx},${ty})`);
+      })
+      .on("mouseleave", () => {
+        focus.style("display", "none");
+        tooltipEl.style("display", "none");
+      });
+
+  }, [seasonal, windowA, windowB, activeSpecies?.color, showSeasonal]);
 
   if (selectedSpecies.length === 0) {
     return (
@@ -203,23 +532,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
         </button>
         {showObservations && (
           chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={140}>
-              <LineChart data={chartData}>
-                <XAxis dataKey="year" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={30} />
-                <Tooltip
-                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  formatter={(v) => [v, "sightings"]}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="count"
-                  stroke={activeSpecies?.color ?? "#22c55e"}
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <svg ref={observationsChartRef} width="100%" height={140} />
           ) : (
             <div className="text-xs text-gray-400 text-center py-8">No data available</div>
           )
@@ -253,23 +566,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
             )}
             {!analysisLoading && analysis?.centroids?.length > 0 ? (
               <>
-                <ResponsiveContainer width="100%" height={140}>
-                  <LineChart data={analysis.centroids}>
-                    <XAxis dataKey="year" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                    <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={30} domain={["auto", "auto"]} />
-                    <Tooltip
-                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                      formatter={(v: any) => [`${Number(v).toFixed(2)}°`, "latitude"]}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="lat"
-                      stroke={activeSpecies?.color ?? "#22c55e"}
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <svg ref={centroidChartRef} width="100%" height={140} />
                 <p className="text-xs text-gray-400 mt-2 italic">
                   * Centroid may fall in uninhabited areas for species with multiple distinct populations.
                 </p>
@@ -300,17 +597,9 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
             <div className="text-xs text-gray-400 text-center py-8 animate-pulse">Loading...</div>
           ) : seasonal ? (
             (() => {
-              const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
               const windows = Object.keys(seasonal).filter(w => w !== "2025-2026");
               const a = windowA ?? windows[0];
               const b = windowB ?? windows[windows.length - 1];
-              const dataA = seasonal[a] as number[];
-              const dataB = seasonal[b] as number[];
-              const chartData = MONTHS.map((month, i) => ({
-                month,
-                [a]: dataA[i],
-                [b]: dataB[i],
-              }));
               return (
                 <>
                   <div className="flex items-center gap-2 mb-3">
@@ -334,15 +623,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
                       ))}
                     </select>
                   </div>
-                  <ResponsiveContainer width="100%" height={140}>
-                    <LineChart data={chartData}>
-                      <XAxis dataKey="month" tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
-                      <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={55} />
-                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                      <Line type="monotone" dataKey={a} stroke="#94a3b8" strokeWidth={2} dot={false} name={a} />
-                      <Line type="monotone" dataKey={b} stroke={activeSpecies?.color ?? "#22c55e"} strokeWidth={2} dot={false} name={b} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                    <svg ref={seasonalChartRef} width="100%" height={140} />
                   <div className="flex items-center gap-4 mt-2">
                     <div className="flex items-center gap-1.5">
                       <span className="w-4 h-0.5 bg-slate-400 inline-block" />
@@ -372,7 +653,7 @@ export default function SidePanel({ selectedSpecies, sightings, onActiveKeyChang
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               Hotspot Summary
             </h3>
-            <p className="text-xs text-gray-400 normal-case font-normal">Grid cells by density change: 1990–2005 vs 2010–2026</p>
+            <p className="text-xs text-gray-400 normal-case font-normal">Grid cells by density change: before 2010 vs after 2010</p>
           </div>
           <span className="text-gray-400 text-xs">{showHotspotSummary ? "▲" : "▼"}</span>
         </button>
